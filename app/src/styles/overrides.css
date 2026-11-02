@@ -1,0 +1,7 @@
+/* lumen.css stays as Lumen ships it. App-level fixes go here. */
+
+/* The decorative bubbles sit above a card's content and would swallow clicks on its buttons. */
+.shape-bubbles::before,
+.shape-bubbles::after {
+  pointer-events: none;
+}
