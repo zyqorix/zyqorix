@@ -1,4 +1,4 @@
-import{cZ as y,c_ as v,c$ as N,d0 as x,d1 as $,d2 as C,d3 as d,di as c,dc as h,dB as m,dC as f,d7 as R,dD as A,dg as S,dh as I,db as T,dk as _,dE as b}from"./index-AYai4rE_.js";const E=y`
+import{c_ as k,c$ as v,d0 as N,d1 as x,d2 as $,d3 as C,d4 as d,dj as c,dd as h,dC as m,dD as f,d8 as R,dE as A,dh as S,di as I,dc as T,dl as _,dF as b}from"./index-TI3OzQQ8.js";const E=k`
   button {
     width: 100%;
     display: flex;
@@ -69,7 +69,7 @@ import{cZ as y,c_ as v,c$ as N,d0 as x,d1 as $,d2 as C,d3 as d,di as c,dc as h,d
       </button>
     `}networksTemplate(){const t=this.networkImages.slice(0,5);return d` <wui-flex class="networks">
       ${t==null?void 0:t.map(o=>d` <wui-flex class="network-icon"> <wui-image src=${o}></wui-image> </wui-flex>`)}
-    </wui-flex>`}};p.styles=[v,N,E];g([x({type:Array})],p.prototype,"networkImages",void 0);g([x()],p.prototype,"text",void 0);p=g([$("wui-compatible-network")],p);const O=y`
+    </wui-flex>`}};p.styles=[v,N,E];g([x({type:Array})],p.prototype,"networkImages",void 0);g([x()],p.prototype,"text",void 0);p=g([$("wui-compatible-network")],p);const O=k`
   wui-compatible-network {
     margin-top: ${({spacing:e})=>e[4]};
     width: 100%;
@@ -124,7 +124,7 @@ import{cZ as y,c_ as v,c$ as N,d0 as x,d1 as $,d2 as C,d3 as d,di as c,dc as h,d
         @click=${this.onReceiveClick.bind(this)}
         text="Only receive assets on this network"
         .networkImages=${[m.getNetworkImage(i)??""]}
-      ></wui-compatible-network>`:null;const n=((a=s==null?void 0:s.filter(l=>{var k;return(k=l==null?void 0:l.assets)==null?void 0:k.imageId}))==null?void 0:a.slice(0,5)).map(m.getNetworkImage).filter(Boolean);return d`<wui-compatible-network
+      ></wui-compatible-network>`:null;const n=((a=s==null?void 0:s.filter(l=>{var y;return(y=l==null?void 0:l.assets)==null?void 0:y.imageId}))==null?void 0:a.slice(0,5)).map(m.getNetworkImage).filter(Boolean);return d`<wui-compatible-network
       @click=${this.onReceiveClick.bind(this)}
       text="Only receive assets on these networks"
       .networkImages=${n}

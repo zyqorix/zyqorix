@@ -1,4 +1,4 @@
-import{cZ as O,d0 as W,dE as l,d1 as _,d2 as I,dr as S,dL as h,dT as T,db as f,dp as F,d3 as c,dU as D,dk as C,dV as N,dm as j,dW as U,dD as $,di as d,dd as P,dX as M,df as u,dY as A,dc as v,dZ as q,dR as R,dC as x}from"./index-AYai4rE_.js";const z=O`
+import{c_ as _,d1 as W,dF as l,d2 as O,d3 as I,ds as S,dM as h,dU as T,dc as f,dq as F,d4 as c,dV as D,dl as C,dW as N,dn as j,dX as U,dE as $,dj as d,de as P,dY as M,dg as u,dZ as A,dd as v,d_ as q,dS as R,dD as x}from"./index-TI3OzQQ8.js";const z=_`
   :host {
     margin-top: ${({spacing:t})=>t[1]};
   }
@@ -15,7 +15,7 @@ import{cZ as O,d0 as W,dE as l,d1 as _,d2 as I,dr as S,dL as h,dT as T,db as f,d
             logo=${s}
             ?disabled=${this.isPwaLoading}
           ></wui-list-social>`)}
-    </wui-flex>`)}async onSocialClick(e){if(this.hasExceededUsageLimit){f.push("UsageExceeded");return}e&&await D(e)}async handlePwaFrameLoad(){var e;if(C.isPWA()){this.isPwaLoading=!0;try{((e=this.authConnector)==null?void 0:e.provider)instanceof N&&await this.authConnector.provider.init()}catch(o){j.open({displayMessage:"Error loading embedded wallet in PWA",debugMessage:o.message},"error")}finally{this.isPwaLoading=!1}}}};p.styles=z;g([W()],p.prototype,"tabIdx",void 0);g([l()],p.prototype,"connectors",void 0);g([l()],p.prototype,"authConnector",void 0);g([l()],p.prototype,"remoteFeatures",void 0);g([l()],p.prototype,"isPwaLoading",void 0);g([l()],p.prototype,"hasExceededUsageLimit",void 0);p=g([_("w3m-social-login-list")],p);const V=O`
+    </wui-flex>`)}async onSocialClick(e){if(this.hasExceededUsageLimit){f.push("UsageExceeded");return}e&&await D(e)}async handlePwaFrameLoad(){var e;if(C.isPWA()){this.isPwaLoading=!0;try{((e=this.authConnector)==null?void 0:e.provider)instanceof N&&await this.authConnector.provider.init()}catch(o){j.open({displayMessage:"Error loading embedded wallet in PWA",debugMessage:o.message},"error")}finally{this.isPwaLoading=!1}}}};p.styles=z;g([W()],p.prototype,"tabIdx",void 0);g([l()],p.prototype,"connectors",void 0);g([l()],p.prototype,"authConnector",void 0);g([l()],p.prototype,"remoteFeatures",void 0);g([l()],p.prototype,"isPwaLoading",void 0);g([l()],p.prototype,"hasExceededUsageLimit",void 0);p=g([O("w3m-social-login-list")],p);const V=_`
   wui-flex {
     max-height: clamp(360px, 540px, 80vh);
     overflow: scroll;
@@ -44,7 +44,7 @@ import{cZ as O,d0 as W,dE as l,d1 as _,d2 as I,dr as S,dL as h,dT as T,db as f,d
       >
         <w3m-social-login-list tabIdx=${$(a)}></w3m-social-login-list>
       </wui-flex>
-    `}};L.styles=V;k([l()],L.prototype,"checked",void 0);L=k([_("w3m-connect-socials-view")],L);const B=O`
+    `}};L.styles=V;k([l()],L.prototype,"checked",void 0);L=k([O("w3m-connect-socials-view")],L);const B=_`
   wui-logo {
     width: 80px;
     height: 80px;
@@ -119,7 +119,7 @@ import{cZ as O,d0 as W,dE as l,d1 as _,d2 as I,dr as S,dL as h,dT as T,db as f,d
           ></wui-flex
         >
       </wui-flex>
-    `}loaderTemplate(){const e=x.state.themeVariables["--w3m-border-radius-master"],o=e?parseInt(e.replace("px",""),10):4;return c`<wui-loading-thumbnail radius=${o*9}></wui-loading-thumbnail>`}parseURLError(e){try{const o="error=",r=e.indexOf(o);return r===-1?null:e.substring(r+o.length)}catch{return null}}connectSocial(){const e=setInterval(()=>{var o;(o=this.socialWindow)!=null&&o.closed&&(!this.connecting&&f.state.view==="ConnectingSocial"&&f.goBack(),clearInterval(e))},1e3);window.addEventListener("message",this.handleSocialConnection,!1)}updateMessage(){this.error?this.message="Something went wrong":this.connecting?this.message="Retrieving user data":this.message="Connect in the provider window"}handleSocialError(e){this.error=!0,this.updateMessage(),this.socialProvider&&u.sendEvent({type:"track",event:"SOCIAL_LOGIN_ERROR",properties:{provider:this.socialProvider,message:e}}),this.closeSocialWindow()}closeSocialWindow(){this.socialWindow&&(this.socialWindow.close(),d.setAccountProp("socialWindow",void 0,d.state.activeChain))}};m.styles=B;b([l()],m.prototype,"socialProvider",void 0);b([l()],m.prototype,"socialWindow",void 0);b([l()],m.prototype,"error",void 0);b([l()],m.prototype,"connecting",void 0);b([l()],m.prototype,"message",void 0);b([l()],m.prototype,"remoteFeatures",void 0);m=b([_("w3m-connecting-social-view")],m);const G=O`
+    `}loaderTemplate(){const e=x.state.themeVariables["--w3m-border-radius-master"],o=e?parseInt(e.replace("px",""),10):4;return c`<wui-loading-thumbnail radius=${o*9}></wui-loading-thumbnail>`}parseURLError(e){try{const o="error=",r=e.indexOf(o);return r===-1?null:e.substring(r+o.length)}catch{return null}}connectSocial(){const e=setInterval(()=>{var o;(o=this.socialWindow)!=null&&o.closed&&(!this.connecting&&f.state.view==="ConnectingSocial"&&f.goBack(),clearInterval(e))},1e3);window.addEventListener("message",this.handleSocialConnection,!1)}updateMessage(){this.error?this.message="Something went wrong":this.connecting?this.message="Retrieving user data":this.message="Connect in the provider window"}handleSocialError(e){this.error=!0,this.updateMessage(),this.socialProvider&&u.sendEvent({type:"track",event:"SOCIAL_LOGIN_ERROR",properties:{provider:this.socialProvider,message:e}}),this.closeSocialWindow()}closeSocialWindow(){this.socialWindow&&(this.socialWindow.close(),d.setAccountProp("socialWindow",void 0,d.state.activeChain))}};m.styles=B;b([l()],m.prototype,"socialProvider",void 0);b([l()],m.prototype,"socialWindow",void 0);b([l()],m.prototype,"error",void 0);b([l()],m.prototype,"connecting",void 0);b([l()],m.prototype,"message",void 0);b([l()],m.prototype,"remoteFeatures",void 0);m=b([O("w3m-connecting-social-view")],m);const G=_`
   wui-shimmer {
     width: 100%;
     aspect-ratio: 1 / 1;
@@ -247,4 +247,4 @@ import{cZ as O,d0 as W,dE as l,d1 as _,d2 as I,dr as S,dL as h,dT as T,db as f,d
     >
       <wui-icon size="sm" color="default" slot="iconRight" name="copy"></wui-icon>
       Copy link
-    </wui-button>`}onCopyUri(){try{this.uri&&(C.copyToClopboard(this.uri),v.showSuccess("Link copied"))}catch{v.showError("Failed to copy")}}};w.styles=G;y([l()],w.prototype,"socialProvider",void 0);y([l()],w.prototype,"uri",void 0);y([l()],w.prototype,"ready",void 0);y([l()],w.prototype,"loading",void 0);y([l()],w.prototype,"remoteFeatures",void 0);w=y([_("w3m-connecting-farcaster-view")],w);export{L as W3mConnectSocialsView,w as W3mConnectingFarcasterView,m as W3mConnectingSocialView};
+    </wui-button>`}onCopyUri(){try{this.uri&&(C.copyToClopboard(this.uri),v.showSuccess("Link copied"))}catch{v.showError("Failed to copy")}}};w.styles=G;y([l()],w.prototype,"socialProvider",void 0);y([l()],w.prototype,"uri",void 0);y([l()],w.prototype,"ready",void 0);y([l()],w.prototype,"loading",void 0);y([l()],w.prototype,"remoteFeatures",void 0);w=y([O("w3m-connecting-farcaster-view")],w);export{L as W3mConnectSocialsView,w as W3mConnectingFarcasterView,m as W3mConnectingSocialView};

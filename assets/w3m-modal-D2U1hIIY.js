@@ -1,11 +1,11 @@
-import{dR as k,er as le,db as c,dd as pe,cZ as v,c_ as V,d1 as f,d2 as g,d3 as d,d0 as l,dD as $,dm as H,dE as u,c$ as me,di as w,d5 as B,dB as U,en as fe,dX as F,df as K,dL as A,dr as M,d8 as we,dc as E,dT as z,ek as oe,dC as be,d7 as ce,es as ge,et as ye}from"./index-AYai4rE_.js";import{P as D}from"./index-Batra7I8.js";import{S as ve}from"./SwapController-BDuCbsRE.js";const de={isUnsupportedChainView(){return c.state.view==="UnsupportedChain"||c.state.view==="SwitchNetwork"&&c.state.history.includes("UnsupportedChain")},async safeClose(){if(this.isUnsupportedChainView()){k.shake();return}if(await le.isSIWXCloseDisabled()){k.shake();return}(c.state.view==="DataCapture"||c.state.view==="DataCaptureOtpConfirm")&&pe.disconnect(),k.close()}},xe=v`
+import{dS as k,es as le,dc as c,de as pe,c_ as v,c$ as V,d2 as f,d3 as g,d4 as d,d1 as l,dE as $,dn as H,dF as u,d0 as me,dj as w,d6 as B,dC as U,eo as fe,dY as F,dg as K,dM as A,ds as M,d9 as we,dd as E,dU as z,el as oe,dD as be,d8 as ce,et as ge,eu as ye}from"./index-TI3OzQQ8.js";import{P as D}from"./index-iINRtRVX.js";import{S as ve}from"./SwapController-l595E-Hz.js";const de={isUnsupportedChainView(){return c.state.view==="UnsupportedChain"||c.state.view==="SwitchNetwork"&&c.state.history.includes("UnsupportedChain")},async safeClose(){if(this.isUnsupportedChainView()){k.shake();return}if(await le.isSIWXCloseDisabled()){k.shake();return}(c.state.view==="DataCapture"||c.state.view==="DataCaptureOtpConfirm")&&pe.disconnect(),k.close()}},xe=v`
   :host {
     display: block;
     border-radius: clamp(0px, ${({borderRadius:e})=>e[8]}, 44px);
     box-shadow: 0 0 0 1px ${({tokens:e})=>e.theme.foregroundPrimary};
     overflow: hidden;
   }
-`;var ke=function(e,t,i,r){var a=arguments.length,o=a<3?t:r===null?r=Object.getOwnPropertyDescriptor(t,i):r,n;if(typeof Reflect=="object"&&typeof Reflect.decorate=="function")o=Reflect.decorate(e,t,i,r);else for(var s=e.length-1;s>=0;s--)(n=e[s])&&(o=(a<3?n(o):a>3?n(t,i,o):n(t,i))||o);return a>3&&o&&Object.defineProperty(t,i,o),o};let X=class extends g{render(){return d`<slot></slot>`}};X.styles=[V,xe];X=ke([f("wui-card")],X);const $e=v`
+`;var ke=function(e,t,i,r){var a=arguments.length,o=a<3?t:r===null?r=Object.getOwnPropertyDescriptor(t,i):r,n;if(typeof Reflect=="object"&&typeof Reflect.decorate=="function")o=Reflect.decorate(e,t,i,r);else for(var s=e.length-1;s>=0;s--)(n=e[s])&&(o=(a<3?n(o):a>3?n(t,i,o):n(t,i))||o);return a>3&&o&&Object.defineProperty(t,i,o),o};let Y=class extends g{render(){return d`<slot></slot>`}};Y.styles=[V,xe];Y=ke([f("wui-card")],Y);const $e=v`
   :host {
     width: 100%;
   }
@@ -249,7 +249,7 @@ import{dR as k,er as le,db as c,dd as pe,cZ as v,c_ as V,d1 as f,d2 as g,d3 as d
     border: 1px solid ${({tokens:e})=>e.theme.foregroundSecondary};
     border-radius: ${({borderRadius:e})=>e[4]};
   }
-`;var q=function(e,t,i,r){var a=arguments.length,o=a<3?t:r===null?r=Object.getOwnPropertyDescriptor(t,i):r,n;if(typeof Reflect=="object"&&typeof Reflect.decorate=="function")o=Reflect.decorate(e,t,i,r);else for(var s=e.length-1;s>=0;s--)(n=e[s])&&(o=(a<3?n(o):a>3?n(t,i,o):n(t,i))||o);return a>3&&o&&Object.defineProperty(t,i,o),o};let T=class extends g{constructor(){super(),this.unsubscribe=[],this.paymentAsset=D.state.paymentAsset,this.amount=D.state.amount,this.unsubscribe.push(D.subscribeKey("paymentAsset",t=>{this.paymentAsset=t}),D.subscribeKey("amount",t=>{this.amount=t}))}disconnectedCallback(){this.unsubscribe.forEach(t=>t())}render(){const i=w.getAllRequestedCaipNetworks().find(r=>r.caipNetworkId===this.paymentAsset.network);return d`<wui-flex
+`;var q=function(e,t,i,r){var a=arguments.length,o=a<3?t:r===null?r=Object.getOwnPropertyDescriptor(t,i):r,n;if(typeof Reflect=="object"&&typeof Reflect.decorate=="function")o=Reflect.decorate(e,t,i,r);else for(var s=e.length-1;s>=0;s--)(n=e[s])&&(o=(a<3?n(o):a>3?n(t,i,o):n(t,i))||o);return a>3&&o&&Object.defineProperty(t,i,o),o};let _=class extends g{constructor(){super(),this.unsubscribe=[],this.paymentAsset=D.state.paymentAsset,this.amount=D.state.amount,this.unsubscribe.push(D.subscribeKey("paymentAsset",t=>{this.paymentAsset=t}),D.subscribeKey("amount",t=>{this.amount=t}))}disconnectedCallback(){this.unsubscribe.forEach(t=>t())}render(){const i=w.getAllRequestedCaipNetworks().find(r=>r.caipNetworkId===this.paymentAsset.network);return d`<wui-flex
       alignItems="center"
       gap="1"
       .padding=${["1","2","1","1"]}
@@ -262,7 +262,7 @@ import{dR as k,er as le,db as c,dd as pe,cZ as v,c_ as V,d1 as f,d2 as g,d3 as d
       <wui-text variant="sm-regular" color="secondary">
         on ${(i==null?void 0:i.name)??"Unknown"}
       </wui-text>
-    </wui-flex>`}};T.styles=[Ee];q([l()],T.prototype,"paymentAsset",void 0);q([l()],T.prototype,"amount",void 0);T=q([f("w3m-pay-header")],T);const Pe=v`
+    </wui-flex>`}};_.styles=[Ee];q([l()],_.prototype,"paymentAsset",void 0);q([l()],_.prototype,"amount",void 0);_=q([f("w3m-pay-header")],_);const Pe=v`
   :host {
     height: 60px;
   }
@@ -413,7 +413,7 @@ import{dR as k,er as le,db as c,dd as pe,cZ as v,c_ as V,d1 as f,d2 as g,d3 as d
       type="neutral"
       variant="primary"
       @click=${this.onWalletHelp.bind(this)}
-    ></wui-icon-button>`}onNetworks(){this.isAllowedNetworkSwitch()&&(K.sendEvent({type:"track",event:"CLICK_NETWORKS"}),c.push("Networks"))}isAllowedNetworkSwitch(){const t=w.getAllRequestedCaipNetworks(),i=t?t.length>1:!1,r=t==null?void 0:t.find(({id:a})=>{var o;return a===((o=this.network)==null?void 0:o.id)});return i||!r}onViewChange(){const{history:t}=c.state;let i=F.VIEW_DIRECTION.Next;t.length<this.prevHistoryLength&&(i=F.VIEW_DIRECTION.Prev),this.prevHistoryLength=t.length,this.viewDirection=i}async onHistoryChange(){var r;const{history:t}=c.state,i=(r=this.shadowRoot)==null?void 0:r.querySelector("#dynamic");t.length>1&&!this.showBack&&i?(await i.animate([{opacity:1},{opacity:0}],{duration:200,fill:"forwards",easing:"ease"}).finished,this.showBack=!0,i.animate([{opacity:0},{opacity:1}],{duration:200,fill:"forwards",easing:"ease"})):t.length<=1&&this.showBack&&i&&(await i.animate([{opacity:1},{opacity:0}],{duration:200,fill:"forwards",easing:"ease"}).finished,this.showBack=!1,i.animate([{opacity:0},{opacity:1}],{duration:200,fill:"forwards",easing:"ease"}))}onGoBack(){c.goBack()}};C.styles=Pe;R([u()],C.prototype,"heading",void 0);R([u()],C.prototype,"network",void 0);R([u()],C.prototype,"networkImage",void 0);R([u()],C.prototype,"showBack",void 0);R([u()],C.prototype,"prevHistoryLength",void 0);R([u()],C.prototype,"view",void 0);R([u()],C.prototype,"viewDirection",void 0);C=R([f("w3m-header")],C);const Te=v`
+    ></wui-icon-button>`}onNetworks(){this.isAllowedNetworkSwitch()&&(K.sendEvent({type:"track",event:"CLICK_NETWORKS"}),c.push("Networks"))}isAllowedNetworkSwitch(){const t=w.getAllRequestedCaipNetworks(),i=t?t.length>1:!1,r=t==null?void 0:t.find(({id:a})=>{var o;return a===((o=this.network)==null?void 0:o.id)});return i||!r}onViewChange(){const{history:t}=c.state;let i=F.VIEW_DIRECTION.Next;t.length<this.prevHistoryLength&&(i=F.VIEW_DIRECTION.Prev),this.prevHistoryLength=t.length,this.viewDirection=i}async onHistoryChange(){var r;const{history:t}=c.state,i=(r=this.shadowRoot)==null?void 0:r.querySelector("#dynamic");t.length>1&&!this.showBack&&i?(await i.animate([{opacity:1},{opacity:0}],{duration:200,fill:"forwards",easing:"ease"}).finished,this.showBack=!0,i.animate([{opacity:0},{opacity:1}],{duration:200,fill:"forwards",easing:"ease"})):t.length<=1&&this.showBack&&i&&(await i.animate([{opacity:1},{opacity:0}],{duration:200,fill:"forwards",easing:"ease"}).finished,this.showBack=!1,i.animate([{opacity:0},{opacity:1}],{duration:200,fill:"forwards",easing:"ease"}))}onGoBack(){c.goBack()}};C.styles=Pe;R([u()],C.prototype,"heading",void 0);R([u()],C.prototype,"network",void 0);R([u()],C.prototype,"networkImage",void 0);R([u()],C.prototype,"showBack",void 0);R([u()],C.prototype,"prevHistoryLength",void 0);R([u()],C.prototype,"view",void 0);R([u()],C.prototype,"viewDirection",void 0);C=R([f("w3m-header")],C);const _e=v`
   :host {
     display: flex;
     align-items: center;
@@ -438,7 +438,7 @@ import{dR as k,er as le,db as c,dd as pe,cZ as v,c_ as V,d1 as f,d2 as g,d3 as d
     background-color: ${({tokens:e})=>e.core.foregroundAccent010};
     border-radius: ${({borderRadius:e})=>e.round} !important;
   }
-`;var Q=function(e,t,i,r){var a=arguments.length,o=a<3?t:r===null?r=Object.getOwnPropertyDescriptor(t,i):r,n;if(typeof Reflect=="object"&&typeof Reflect.decorate=="function")o=Reflect.decorate(e,t,i,r);else for(var s=e.length-1;s>=0;s--)(n=e[s])&&(o=(a<3?n(o):a>3?n(t,i,o):n(t,i))||o);return a>3&&o&&Object.defineProperty(t,i,o),o};let _=class extends g{constructor(){super(...arguments),this.message="",this.variant="success"}render(){return d`
+`;var Q=function(e,t,i,r){var a=arguments.length,o=a<3?t:r===null?r=Object.getOwnPropertyDescriptor(t,i):r,n;if(typeof Reflect=="object"&&typeof Reflect.decorate=="function")o=Reflect.decorate(e,t,i,r);else for(var s=e.length-1;s>=0;s--)(n=e[s])&&(o=(a<3?n(o):a>3?n(t,i,o):n(t,i))||o);return a>3&&o&&Object.defineProperty(t,i,o),o};let T=class extends g{constructor(){super(...arguments),this.message="",this.variant="success"}render(){return d`
       ${this.templateIcon()}
       <wui-text variant="lg-regular" color="primary" data-testid="wui-snackbar-message"
         >${this.message}</wui-text
@@ -447,7 +447,7 @@ import{dR as k,er as le,db as c,dd as pe,cZ as v,c_ as V,d1 as f,d2 as g,d3 as d
       size="md"
       color=${t[this.variant]}
       icon=${i[this.variant]}
-    ></wui-icon-box>`}};_.styles=[V,Te];Q([l()],_.prototype,"message",void 0);Q([l()],_.prototype,"variant",void 0);_=Q([f("wui-snackbar")],_);const _e=we`
+    ></wui-icon-box>`}};T.styles=[V,_e];Q([l()],T.prototype,"message",void 0);Q([l()],T.prototype,"variant",void 0);T=Q([f("wui-snackbar")],T);const Te=we`
   :host {
     display: block;
     position: absolute;
@@ -457,7 +457,7 @@ import{dR as k,er as le,db as c,dd as pe,cZ as v,c_ as V,d1 as f,d2 as g,d3 as d
     left: 50%;
     width: max-content;
   }
-`;var he=function(e,t,i,r){var a=arguments.length,o=a<3?t:r===null?r=Object.getOwnPropertyDescriptor(t,i):r,n;if(typeof Reflect=="object"&&typeof Reflect.decorate=="function")o=Reflect.decorate(e,t,i,r);else for(var s=e.length-1;s>=0;s--)(n=e[s])&&(o=(a<3?n(o):a>3?n(t,i,o):n(t,i))||o);return a>3&&o&&Object.defineProperty(t,i,o),o};let L=class extends g{constructor(){super(),this.unsubscribe=[],this.timeout=void 0,this.open=E.state.open,this.unsubscribe.push(E.subscribeKey("open",t=>{this.open=t,this.onOpen()}))}disconnectedCallback(){clearTimeout(this.timeout),this.unsubscribe.forEach(t=>t())}render(){const{message:t,variant:i}=E.state;return d` <wui-snackbar message=${t} variant=${i}></wui-snackbar> `}onOpen(){clearTimeout(this.timeout),this.open?(this.animate([{opacity:0,transform:"translateX(-50%) scale(0.85)"},{opacity:1,transform:"translateX(-50%) scale(1)"}],{duration:150,fill:"forwards",easing:"ease"}),this.timeout&&clearTimeout(this.timeout),E.state.autoClose&&(this.timeout=setTimeout(()=>E.hide(),2500))):this.animate([{opacity:1,transform:"translateX(-50%) scale(1)"},{opacity:0,transform:"translateX(-50%) scale(0.85)"}],{duration:150,fill:"forwards",easing:"ease"})}};L.styles=_e;he([u()],L.prototype,"open",void 0);L=he([f("w3m-snackbar")],L);const ze=v`
+`;var he=function(e,t,i,r){var a=arguments.length,o=a<3?t:r===null?r=Object.getOwnPropertyDescriptor(t,i):r,n;if(typeof Reflect=="object"&&typeof Reflect.decorate=="function")o=Reflect.decorate(e,t,i,r);else for(var s=e.length-1;s>=0;s--)(n=e[s])&&(o=(a<3?n(o):a>3?n(t,i,o):n(t,i))||o);return a>3&&o&&Object.defineProperty(t,i,o),o};let L=class extends g{constructor(){super(),this.unsubscribe=[],this.timeout=void 0,this.open=E.state.open,this.unsubscribe.push(E.subscribeKey("open",t=>{this.open=t,this.onOpen()}))}disconnectedCallback(){clearTimeout(this.timeout),this.unsubscribe.forEach(t=>t())}render(){const{message:t,variant:i}=E.state;return d` <wui-snackbar message=${t} variant=${i}></wui-snackbar> `}onOpen(){clearTimeout(this.timeout),this.open?(this.animate([{opacity:0,transform:"translateX(-50%) scale(0.85)"},{opacity:1,transform:"translateX(-50%) scale(1)"}],{duration:150,fill:"forwards",easing:"ease"}),this.timeout&&clearTimeout(this.timeout),E.state.autoClose&&(this.timeout=setTimeout(()=>E.hide(),2500))):this.animate([{opacity:1,transform:"translateX(-50%) scale(1)"},{opacity:0,transform:"translateX(-50%) scale(0.85)"}],{duration:150,fill:"forwards",easing:"ease"})}};L.styles=Te;he([u()],L.prototype,"open",void 0);L=he([f("w3m-snackbar")],L);const ze=v`
   :host {
     z-index: ${({tokens:e})=>e.core.zIndex};
     display: block;
@@ -711,7 +711,7 @@ import{dR as k,er as le,db as c,dd as pe,cZ as v,c_ as V,d1 as f,d2 as g,d3 as d
     border-radius: ${({borderRadius:e})=>e[5]};
     background-color: ${({colors:e})=>e.semanticError010};
   }
-`;var Be=function(e,t,i,r){var a=arguments.length,o=a<3?t:r===null?r=Object.getOwnPropertyDescriptor(t,i):r,n;if(typeof Reflect=="object"&&typeof Reflect.decorate=="function")o=Reflect.decorate(e,t,i,r);else for(var s=e.length-1;s>=0;s--)(n=e[s])&&(o=(a<3?n(o):a>3?n(t,i,o):n(t,i))||o);return a>3&&o&&Object.defineProperty(t,i,o),o};let Y=class extends g{constructor(){super()}render(){return d`
+`;var Be=function(e,t,i,r){var a=arguments.length,o=a<3?t:r===null?r=Object.getOwnPropertyDescriptor(t,i):r,n;if(typeof Reflect=="object"&&typeof Reflect.decorate=="function")o=Reflect.decorate(e,t,i,r);else for(var s=e.length-1;s>=0;s--)(n=e[s])&&(o=(a<3?n(o):a>3?n(t,i,o):n(t,i))||o);return a>3&&o&&Object.defineProperty(t,i,o),o};let X=class extends g{constructor(){super()}render(){return d`
       <wui-flex
         flexDirection="column"
         alignItems="center"
@@ -739,7 +739,7 @@ import{dR as k,er as le,db as c,dd as pe,cZ as v,c_ as V,d1 as f,d2 as g,d3 as d
           Try Again
         </wui-button>
       </wui-flex>
-    `}onTryAgainClick(){c.goBack()}};Y.styles=He;Y=Be([f("w3m-usage-exceeded-view")],Y);const je=v`
+    `}onTryAgainClick(){c.goBack()}};X.styles=He;X=Be([f("w3m-usage-exceeded-view")],X);const je=v`
   :host {
     width: 100%;
   }
@@ -888,4 +888,4 @@ import{dR as k,er as le,db as c,dd as pe,cZ as v,c_ as V,d1 as f,d2 as g,d3 as d
           </div>
         </div>
       </div>
-    `}onViewChange(t){const i=t.split(",").filter(Boolean),r=this.historyState.split(",").filter(Boolean),a=r.length,o=i.length,n=i[i.length-1]||"",s=ce.cssDurationToNumber(this.transitionDuration);let m="";o>a?m="next":o<a?m="prev":o===a&&i[o-1]!==r[a-1]&&(m="next"),queueMicrotask(()=>{this.viewDirection=`${m}-${n}`}),setTimeout(()=>{var y;this.historyState=t,(y=this.setView)==null||y.call(this,n)},s),setTimeout(()=>{this.viewDirection=""},s*2)}getWrapper(){var t;return(t=this.shadowRoot)==null?void 0:t.querySelector("div.page")}updateContainerHeight(){var a;const t=this.getWrapper();if(!t)return;const i=parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--apkt-footer-height")||"0");let r=0;if(this.mobileFullScreen){const o=((a=window.visualViewport)==null?void 0:a.height)||window.innerHeight,n=this.getHeaderHeight();r=o-n-i,this.style.setProperty("--local-border-bottom-radius","0px")}else r=t.getBoundingClientRect().height+i,this.style.setProperty("--local-border-bottom-radius",i?"var(--apkt-borderRadius-5)":"0px");this.style.setProperty("--local-container-height",`${r}px`),this.previousHeight!=="0px"&&this.style.setProperty("--local-duration-height",this.transitionDuration),this.previousHeight=`${r}px`}getHeaderHeight(){return Ve}};b.styles=[Le];W([l({type:String})],b.prototype,"transitionDuration",void 0);W([l({type:String})],b.prototype,"transitionFunction",void 0);W([l({type:String})],b.prototype,"history",void 0);W([l({type:String})],b.prototype,"view",void 0);W([l({attribute:!1})],b.prototype,"setView",void 0);W([u()],b.prototype,"viewDirection",void 0);W([u()],b.prototype,"historyState",void 0);W([u()],b.prototype,"previousHeight",void 0);W([u()],b.prototype,"mobileFullScreen",void 0);b=W([f("w3m-router-container")],b);export{se as AppKitModal,h as W3mListWallet,ne as W3mModal,x as W3mModalBase,b as W3mRouterContainer,Y as W3mUsageExceededView};
+    `}onViewChange(t){const i=t.split(",").filter(Boolean),r=this.historyState.split(",").filter(Boolean),a=r.length,o=i.length,n=i[i.length-1]||"",s=ce.cssDurationToNumber(this.transitionDuration);let m="";o>a?m="next":o<a?m="prev":o===a&&i[o-1]!==r[a-1]&&(m="next"),queueMicrotask(()=>{this.viewDirection=`${m}-${n}`}),setTimeout(()=>{var y;this.historyState=t,(y=this.setView)==null||y.call(this,n)},s),setTimeout(()=>{this.viewDirection=""},s*2)}getWrapper(){var t;return(t=this.shadowRoot)==null?void 0:t.querySelector("div.page")}updateContainerHeight(){var a;const t=this.getWrapper();if(!t)return;const i=parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--apkt-footer-height")||"0");let r=0;if(this.mobileFullScreen){const o=((a=window.visualViewport)==null?void 0:a.height)||window.innerHeight,n=this.getHeaderHeight();r=o-n-i,this.style.setProperty("--local-border-bottom-radius","0px")}else r=t.getBoundingClientRect().height+i,this.style.setProperty("--local-border-bottom-radius",i?"var(--apkt-borderRadius-5)":"0px");this.style.setProperty("--local-container-height",`${r}px`),this.previousHeight!=="0px"&&this.style.setProperty("--local-duration-height",this.transitionDuration),this.previousHeight=`${r}px`}getHeaderHeight(){return Ve}};b.styles=[Le];W([l({type:String})],b.prototype,"transitionDuration",void 0);W([l({type:String})],b.prototype,"transitionFunction",void 0);W([l({type:String})],b.prototype,"history",void 0);W([l({type:String})],b.prototype,"view",void 0);W([l({attribute:!1})],b.prototype,"setView",void 0);W([u()],b.prototype,"viewDirection",void 0);W([u()],b.prototype,"historyState",void 0);W([u()],b.prototype,"previousHeight",void 0);W([u()],b.prototype,"mobileFullScreen",void 0);b=W([f("w3m-router-container")],b);export{se as AppKitModal,h as W3mListWallet,ne as W3mModal,x as W3mModalBase,b as W3mRouterContainer,X as W3mUsageExceededView};
