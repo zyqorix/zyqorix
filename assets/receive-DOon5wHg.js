@@ -1,4 +1,4 @@
-import{c_ as k,c$ as v,d0 as N,d1 as x,d2 as $,d3 as C,d4 as d,dj as c,dd as h,dC as m,dD as f,d8 as R,dE as A,dh as S,di as I,dc as T,dl as _,dF as b}from"./index-DJPvgokT.js";const E=k`
+import{cY as k,cZ as v,c_ as N,c$ as x,d0 as $,d1 as C,d2 as d,dh as c,db as h,dA as m,dB as f,d6 as R,dC as A,df as S,dg as I,da as T,dj as _,dD as b}from"./index-BtpYS3gI.js";const O=k`
   button {
     width: 100%;
     display: flex;
@@ -69,7 +69,7 @@ import{c_ as k,c$ as v,d0 as N,d1 as x,d2 as $,d3 as C,d4 as d,dj as c,dd as h,d
       </button>
     `}networksTemplate(){const t=this.networkImages.slice(0,5);return d` <wui-flex class="networks">
       ${t==null?void 0:t.map(o=>d` <wui-flex class="network-icon"> <wui-image src=${o}></wui-image> </wui-flex>`)}
-    </wui-flex>`}};p.styles=[v,N,E];g([x({type:Array})],p.prototype,"networkImages",void 0);g([x()],p.prototype,"text",void 0);p=g([$("wui-compatible-network")],p);const O=k`
+    </wui-flex>`}};p.styles=[v,N,O];g([x({type:Array})],p.prototype,"networkImages",void 0);g([x()],p.prototype,"text",void 0);p=g([$("wui-compatible-network")],p);const E=k`
   wui-compatible-network {
     margin-top: ${({spacing:e})=>e[4]};
     width: 100%;
@@ -128,4 +128,4 @@ import{c_ as k,c$ as v,d0 as N,d1 as x,d2 as $,d3 as C,d4 as d,dj as c,dd as h,d
       @click=${this.onReceiveClick.bind(this)}
       text="Only receive assets on these networks"
       .networkImages=${n}
-    ></wui-compatible-network>`}onReceiveClick(){T.push("WalletCompatibleNetworks")}onCopyClick(){try{this.address&&(_.copyToClopboard(this.address),h.showSuccess("Address copied"))}catch{h.showError("Failed to copy")}}};u.styles=O;w([b()],u.prototype,"address",void 0);w([b()],u.prototype,"profileName",void 0);w([b()],u.prototype,"network",void 0);u=w([$("w3m-wallet-receive-view")],u);export{u as W3mWalletReceiveView};
+    ></wui-compatible-network>`}onReceiveClick(){T.push("WalletCompatibleNetworks")}onCopyClick(){try{this.address&&(_.copyToClopboard(this.address),h.showSuccess("Address copied"))}catch{h.showError("Failed to copy")}}};u.styles=E;w([b()],u.prototype,"address",void 0);w([b()],u.prototype,"profileName",void 0);w([b()],u.prototype,"network",void 0);u=w([$("w3m-wallet-receive-view")],u);export{u as W3mWalletReceiveView};
