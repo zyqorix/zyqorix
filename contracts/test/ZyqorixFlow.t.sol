@@ -79,6 +79,19 @@ contract MockPositionManager {
     receive() external payable {}
 }
 
+/// @dev Stand-in for a Safe multisig: a contract owner that acts only through `exec`, with no receive() at all
+///      (stricter than a real Safe, which accepts BNB). Proves nothing assumes the owner is an EOA.
+contract MockMultisig {
+    address immutable signer;
+    constructor() { signer = msg.sender; }
+    function exec(address target, bytes calldata data) external returns (bytes memory out) {
+        require(msg.sender == signer, "NOT_SIGNER");
+        bool ok;
+        (ok, out) = target.call(data);
+        if (!ok) assembly { revert(add(out, 32), mload(out)) }
+    }
+}
+
 /// @dev Every member action, in order, on the real contracts. Only PancakeSwap is mocked.
 contract ZyqorixFlowTest is Test {
     using stdStorage for StdStorage;
@@ -984,5 +997,113 @@ contract ZyqorixFlowTest is Test {
         gateway.withdrawAgent(5 ether);
         assertEq(usdt.balanceOf(leader), before + 5 ether);
         assertEq(usdt.balanceOf(fundingWallet) + usdt.balanceOf(fundingWallet2), 0);
+    }
+
+    /* ------------------- Ownership handed to a multisig (runbook 11.3) ------------------- */
+    /// @dev The full 11.3 handover: accounts (two-step; covers funder, gateway, rewards, register and vesting),
+    ///      liquidity and the exchanger. Root stays the deployer, members keep working, the old key loses
+    ///      every owner power, and every owner and admin call still works through the multisig.
+    function test_multisigOwnershipHandover() public {
+        _mintPosition();
+        ExchangerDisbursement disb = new ExchangerDisbursement(owner);
+        disb.addExchanger(makeAddr("ex1"));
+        funder.setTradingWallet(address(disb));
+        _register(leader, owner);
+        _activate(leader, 0);
+
+        MockMultisig safe = new MockMultisig();
+        address ops = makeAddr("ops");
+        accounts.addAdmin(ops); // day-to-day admin on a plain wallet, added while the old key still owns
+
+        // accounts: nothing changes until the multisig accepts.
+        accounts.transferOwnership(address(safe));
+        assertEq(accounts.owner(), owner);
+        vm.expectRevert("NOT_PENDING_OWNER");
+        vm.prank(ops);
+        accounts.acceptOwnership();
+        safe.exec(address(accounts), abi.encodeWithSignature("acceptOwnership()"));
+        assertEq(accounts.owner(), address(safe));
+        assertEq(accounts.pendingOwner(), address(0));
+        assertEq(accounts.root(), owner); // root never moves
+        assertTrue(accounts.checkIsAdmin(address(safe)));
+        assertFalse(accounts.checkIsAdmin(owner)); // the old key is no longer owner or admin
+        assertTrue(accounts.checkIsAdmin(ops));
+
+        // liquidity and the exchanger: single-step, so the address must be right the first time.
+        lp.transferOwnership(address(safe));
+        disb.transferOwnership(address(safe));
+        assertEq(lp.owner(), address(safe));
+        assertEq(disb.owner(), address(safe));
+
+        // The old key has lost every owner power.
+        vm.expectRevert("NOT_OWNER");
+        funder.setTradingWallet(trading);
+        vm.expectRevert("NOT_AUTH");
+        funder.sendToTrading(1 ether);
+        vm.expectRevert("NOT_OWNER");
+        gateway.lockFunder();
+        vm.expectRevert("NOT_AUTH");
+        gateway.setPaused(true);
+        vm.expectRevert("NOT_OWNER");
+        vesting.withdrawUnreserved(owner, 1 ether);
+        vm.expectRevert("NOT_OWNER");
+        lp.emergencyWithdraw();
+        vm.expectRevert();
+        disb.addExchanger(makeAddr("ex2"));
+
+        // Members carry on: register under root, deposit, activate, claim, withdraw.
+        _register(sponsor, owner);
+        _activate(sponsor, 0);
+        _register(alice, sponsor);
+        _activate(alice, 0);
+        _deposit(alice, 120 ether); // 100 for the next tier, 20 to withdraw
+        _activate(alice, 1);
+        vm.warp(JAN_15_2027 + DAY + 1);
+        vm.prank(alice);
+        rewards.claimDaily();
+        uint256 cash = usdt.balanceOf(alice);
+        vm.prank(alice);
+        gateway.withdraw(20 ether);
+        assertGt(usdt.balanceOf(alice), cash);
+
+        // The ops admin still runs admin tasks, including sendToTrading (owner 2026-11-09), but no owner task.
+        vm.prank(ops);
+        funder.sendToTrading(1 ether);
+        vm.prank(ops);
+        gateway.setPaused(true);
+        vm.prank(ops);
+        gateway.setPaused(false);
+        vm.prank(ops);
+        vm.expectRevert("NOT_OWNER");
+        funder.addFundingWallet(makeAddr("fw"));
+
+        // Every owner call works through the multisig.
+        safe.exec(address(funder), abi.encodeCall(ZyqorixFunder.addFundingWallet, (makeAddr("fw"))));
+        uint256 out = funder.tradingCapitalOut();
+        safe.exec(address(funder), abi.encodeCall(ZyqorixFunder.sendToTrading, (1 ether)));
+        assertEq(funder.tradingCapitalOut(), out + 1 ether);
+        safe.exec(address(rewards), abi.encodeCall(ZyqorixRewards.setAgent, (leader, true)));
+        assertTrue(rewards.isAgent(leader));
+        safe.exec(address(vesting), abi.encodeCall(ZyqorixVesting.withdrawUnreserved, (address(safe), 1 ether)));
+        assertEq(zqr.balanceOf(address(safe)), 1 ether); // ZQR lands in the multisig with no receive()
+        safe.exec(address(disb), abi.encodeCall(ExchangerDisbursement.addExchanger, (makeAddr("ex2"))));
+        assertEq(disb.exchangerCount(), 2);
+        safe.exec(address(lp), abi.encodeCall(ZyqorixLiquidity.collectFees, ()));
+        // Launch locks can also be done after the handover, in the runbook order (11.1 then 11.2).
+        safe.exec(address(lp), abi.encodeCall(ZyqorixLiquidity.lockLiquidity, ()));
+        safe.exec(address(gateway), abi.encodeCall(ZyqorixGateway.lockFunder, ()));
+        assertTrue(gateway.funderLocked());
+    }
+
+    /// @dev Cancelling or re-pointing a pending handover: the owner can overwrite the pending address.
+    function test_pendingOwnerCanBeReplacedBeforeAccept() public {
+        MockMultisig wrong = new MockMultisig();
+        MockMultisig right = new MockMultisig();
+        accounts.transferOwnership(address(wrong));
+        accounts.transferOwnership(address(right));
+        vm.expectRevert("NOT_PENDING_OWNER");
+        wrong.exec(address(accounts), abi.encodeWithSignature("acceptOwnership()"));
+        right.exec(address(accounts), abi.encodeWithSignature("acceptOwnership()"));
+        assertEq(accounts.owner(), address(right));
     }
 }

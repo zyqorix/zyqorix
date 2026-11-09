@@ -3,10 +3,10 @@
 **Prepared:** 2026-11-07, **updated 2026-11-09** · **Decision:** redeploy every ZYQORIX contract fresh on solc 0.8.38, keep the ZQR token.
 **Source changes since 2026-11-07** (all in `projects/zyqorix/contracts/`, tested and on the NAS rehearsal unless noted):
 - **rewards.sol (2026-11-08):** tier days count from the member's first activation; members activate from their whole wallet balance. Deposits are spent first; a part paid from rewards draws 80% of itself (60% trading + 20% liquidity) from the reward pool, first come first served, and its referral, agent and leadership shares are paid as reward credit. Audited GO. Live on the NAS at `0x3195…b890`.
-- **funder.sol (2026-11-09, owner decision):** the accounts owner may call `sendToTrading(amount)` as well as rewards. It moves funder USDT (which includes member deposits) to the trading wallet and counts it in `tradingCapitalOut`. **Not on the NAS funder yet.** See Step 5.
+- **funder.sol (2026-11-09, owner decision):** the accounts owner **and any admin** may call `sendToTrading(amount)` as well as rewards (error `NOT_AUTH` for anyone else). It moves funder USDT (which includes member deposits) to the trading wallet and counts it in `tradingCapitalOut`. **Not on the NAS funder yet.** See Step 5.
 **Deployer:** the owner, in Remix (https://app.remix.live/). **Deploy accounts from the wallet that must be root:** root is the top of the tree and can never move.
 **Remix settings for every contract:** solc **0.8.38**, optimizer **on, 200 runs**, same EVM version for all, no via-IR. Source: `projects/zyqorix/contracts/`.
-**Why 0.8.38:** BscScan flags 0.8.37 for the low-severity bug SOL-2026-7 (YulOptimizerKnowledgeBaseStaleBookkeeping), which 0.8.38 fixes. Every contract pins exactly `pragma solidity 0.8.38;` (only zqrtoken.sol keeps a range, since ZQR is not redeployed). All 302 tests pass on 0.8.38. Runtime sizes at 200 runs, no via-IR, EVM shanghai or later (measured 2026-11-09): accounts 5,096 B, liquidity 16,252 B, vesting 4,428 B, exchanger 3,052 B, funder 7,156 B, gateway 11,673 B, rewards 19,905 B, register 1,639 B (limit 24,576). On EVM paris, rewards is 20,307 B, still under the limit.
+**Why 0.8.38:** BscScan flags 0.8.37 for the low-severity bug SOL-2026-7 (YulOptimizerKnowledgeBaseStaleBookkeeping), which 0.8.38 fixes. Every contract pins exactly `pragma solidity 0.8.38;` (only zqrtoken.sol keeps a range, since ZQR is not redeployed). All 305 tests pass on 0.8.38. Runtime sizes at 200 runs, no via-IR, EVM shanghai or later (measured 2026-11-09): accounts 5,096 B, liquidity 16,252 B, vesting 4,428 B, exchanger 3,052 B, funder 7,206 B, gateway 11,673 B, rewards 19,905 B, register 1,639 B (limit 24,576). On EVM paris, rewards is 20,307 B, still under the limit.
 **After each contract:** verify it on BscScan and send Claude the address. Claude compares the on-chain code to the 0.8.38 build and confirms each task with a read-only `cast call`. Tick ☐ only when the check matches.
 
 ## Deployment order at a glance
@@ -78,7 +78,7 @@ ACCOUNTS= EXCHANGER= LIQUIDITY= VESTING= FUNDER= GATEWAY= REWARDS= REGISTER=   #
 ## Step 5: funder: deploy `ZyqorixFunder(ACCOUNTS)`
 - ☐ 5.1 Verify and send the address.
 - ☐ 5.2 `setTradingWallet(EXCHANGER)`. Check: `tradingWallet()` = EXCHANGER.
-- **Owner power:** the accounts owner can call `funder.sendToTrading(amount)` at any time, for any amount the funder holds. That includes member deposits, so a large send can leave the funder unable to pay withdrawals until trading returns funds. Use it only for trading capital you mean to move, and keep the owner key safe until 11.3 moves it to a multisig.
+- **Owner and admin power:** the accounts owner or any admin (`accounts.addAdmin`) can call `funder.sendToTrading(amount)` at any time, for any amount the funder holds. That includes member deposits, so a large send can leave the funder unable to pay withdrawals until trading returns funds. Use it only for trading capital you mean to move, and keep the owner key safe until 11.3 moves it to a multisig. Every admin wallet holds this power too, so add plain-wallet admins only if you trust them with the treasury.
   - **Not capped to the surplus (owner decision 2026-11-09, audit M-1 accepted, disclosure only).** A send larger than the funder's spare USDT leaves `rewardPool` booked higher than the USDT backing it, so later reward withdrawals are paid from member deposits until the funder runs dry. Spare USDT = funder balance − (`totalWalletBalance` − `totalRewardCredit`) − (`totalAgentBalance` − `totalAgentCredit`) − (`leadershipPool` − `leadershipCredit`) − `rewardPool`; Claude can read it before any send. Disclosed to members in the FAQ ("Who controls the treasury?").
 
 ## Step 6: gateway: deploy `ZyqorixGateway(ACCOUNTS, FUNDER)`
@@ -117,7 +117,14 @@ GATEWAY is locked in for good, so it must be the Step 6 address. This is the 202
 ## Step 11: launch locks (one-way, before real deposits)
 - ☐ 11.1 `liquidity.lockLiquidity()`. Check: `liquidityLocked()` = true.
 - ☐ 11.2 `gateway.lockFunder()`, **after 11.1**. Check: `funderLocked()` = true.
-- ☐ 11.3 Move ownership of accounts (covers funder, gateway, rewards, register and vesting), the exchanger and liquidity to a multisig. This also moves the owner's `funder.sendToTrading` power (Step 5) behind the multisig.
+- ☐ 11.3 Move ownership of accounts (covers funder, gateway, rewards, register and vesting), the exchanger and liquidity to a multisig. This moves the owner's `funder.sendToTrading` power (Step 5) behind the multisig; admins keep it, so the multisig protects it only if no plain-wallet admin is added.
+  Tested in Foundry (`test_multisigOwnershipHandover`, a contract owner with no receive()): members keep registering, activating, claiming and withdrawing; every owner call works through the multisig. Order:
+  1. Create the Safe **on BNB Smart Chain** and send Claude its address. Claude checks it has code on chain 56.
+  2. Optional: `accounts.addAdmin(OPS)` for a plain day-to-day wallet **while the old key still owns**. After the handover the old key is neither owner nor admin. Admin tasks (pause, agents, limits, prices, `setFunder` before 11.2, `withdrawFor`, **and `funder.sendToTrading`**) can run from OPS; owner tasks need the Safe.
+  3. `accounts.transferOwnership(SAFE)`, then the Safe executes `accounts.acceptOwnership()` (Safe Transaction Builder). Two-step: nothing changes until the accept, and a wrong pending address can be overwritten. Check: `owner()` = SAFE, `root()` still = the deployer.
+  4. Only after 3 succeeds, use the same proven address for the single-step ones: `liquidity.transferOwnership(SAFE)` and `exchanger.transferOwnership(SAFE)`. These take effect at once: a typo loses them for good. **Never call `exchanger.renounceOwnership()`.**
+  - After the handover, liquidity fees and withdrawals (`collectFees`, `emergencyWithdraw`, `tokenWithdraw`) pay USDT and ZQR to the Safe. Root stays the deployer wallet for good (top of the tree; it earns as a sponsor), so keep that key too.
+  - Owner-only actions on zyqorix.net (`/admin`, `/fund` funding wallets) need the Safe connected through WalletConnect; the Safe Transaction Builder is the dependable route.
 
 ## If something goes wrong
 - **Before 11.2**, every link can be changed again.

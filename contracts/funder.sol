@@ -6,9 +6,9 @@ pragma solidity 0.8.38;
  * The treasury. It holds members' wallet money, what activations leave in it and the trading profit. The trading
  * share of each activation is spent on trading and never comes back; `tradingCapitalOut` only counts it. Every USDT
  * returned through `fundRewards` or the funding wallets is trading profit and enters the reward pool, which alone
- * pays out daily and generation rewards. The owner can send any USDT held here, member deposits included, to the
- * trading wallet with `sendToTrading` (owner 2026-11-09, disclosed to members; not capped to the surplus, so an
- * oversized send leaves withdrawals failing until the treasury is refilled). The owner can also relink the gateway
+ * pays out daily and generation rewards. The owner or any admin can send any USDT held here, member deposits
+ * included, to the trading wallet with `sendToTrading` (owner 2026-11-09, disclosed to members; not capped to the
+ * surplus, so an oversized send leaves withdrawals failing until the treasury is refilled). The owner can also relink the gateway
  * and rewards addresses (setGateway, setRewards), and whatever they point at controls this USDT. The trading wallet can never be a funding wallet: returned trading capital would then book as profit,
  * and member deposits would pay daily rewards. Only profit may land in a funding wallet.
  *
@@ -40,6 +40,8 @@ interface IZyqorixAccounts {
     /// @notice The accounts contract owner — the single highest authority.
     /// @return The current owner address.
     function owner() external view returns (address);
+    /// @notice True if `account` is the accounts owner or an explicit admin.
+    function checkIsAdmin(address account) external view returns (bool);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -65,7 +67,7 @@ interface IZyqorixLiquidity {
 /* ========================================================================== */
 /// @title ZyqorixFunder
 /// @author ZYQORIX
-/// @notice Holds the ZYQORIX payment token. `pay` is gateway-only; `sendToTrading` is rewards or the accounts owner;
+/// @notice Holds the ZYQORIX payment token. `pay` is gateway-only; `sendToTrading` is rewards, the owner or an admin;
 ///         the other activation flows are rewards-only.
 /// @dev The owner can relink the gateway and rewards addresses at any time (owner 2026-11-04), so a future
 ///      rewards or gateway change needs no new funder. Whoever holds the accounts owner key decides who can reach
@@ -114,7 +116,7 @@ contract ZyqorixFunder {
     /// @notice Emitted when the trading wallet is changed.
     /// @param wallet The new trading wallet.
     event TradingWalletSet(address indexed wallet);
-    /// @notice Emitted when USDT goes to the trading wallet: an activation's trading share or an owner send.
+    /// @notice Emitted when USDT goes to the trading wallet: an activation's trading share or an owner/admin send.
     /// @param wallet The trading wallet.
     /// @param amount The amount sent.
     event TradingCapitalSent(address indexed wallet, uint256 amount);
@@ -181,12 +183,12 @@ contract ZyqorixFunder {
 
     /* ============================= REWARDS ============================= */
     /// @notice Send USDT to the trading wallet and record it as capital out: an activation's trading share (rewards)
-    ///         or any amount the owner chooses (owner 2026-11-09).
+    ///         or any amount the owner or an admin chooses (owner 2026-11-09).
     /// @param amount The amount to send.
-    /// @dev Rewards or the accounts owner. Not capped to the surplus: an owner send can include member deposits.
-    ///      Reverts NOT_REWARDS (any other caller) / TRADING_WALLET_NOT_SET.
+    /// @dev Rewards, the accounts owner or an admin. Not capped to the surplus: such a send can include member deposits.
+    ///      Reverts NOT_AUTH (anyone but rewards, the owner or an admin) / TRADING_WALLET_NOT_SET.
     function sendToTrading(uint256 amount) external {
-        require(msg.sender == rewards || msg.sender == accounts.owner(), "NOT_REWARDS");
+        require(msg.sender == rewards || accounts.checkIsAdmin(msg.sender), "NOT_AUTH");
         require(tradingWallet != address(0), "TRADING_WALLET_NOT_SET");
         tradingCapitalOut += amount;
         _safeTransfer(token, tradingWallet, amount);

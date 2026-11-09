@@ -671,8 +671,8 @@ contract ZyqorixRewardsTest is Test {
     }
 
     function test_activationFlowsAreRewardsOnly() public {
-        vm.prank(alice); // the owner may call sendToTrading (below); anyone else may not
-        vm.expectRevert("NOT_REWARDS");
+        vm.prank(alice); // the owner or an admin may call sendToTrading (below); anyone else may not
+        vm.expectRevert("NOT_AUTH");
         funder.sendToTrading(1 ether);
         vm.expectRevert("NOT_REWARDS");
         funder.sendToLiquidity(address(lp), 1 ether, 300);
@@ -680,8 +680,8 @@ contract ZyqorixRewardsTest is Test {
         funder.drawRewardPool(1 ether);
     }
 
-    /// Owner 2026-11-08: the owner may send funder USDT to the trading wallet directly. It is counted as
-    /// capital out like an activation's trading share, and nobody else can call it.
+    /// Owner 2026-11-09: the owner or an admin may send funder USDT to the trading wallet directly. It is
+    /// counted as capital out like an activation's trading share; nobody else can call it.
     function test_ownerCanSendToTrading() public {
         _activate(alice, 1);
         uint256 outBefore = funder.tradingCapitalOut();
@@ -691,6 +691,23 @@ contract ZyqorixRewardsTest is Test {
         assertEq(funder.tradingCapitalOut() - outBefore, 10 ether);
         assertEq(usdt.balanceOf(address(funder)), held - 10 ether);
         assertEq(usdt.balanceOf(trading) - walletBefore, 10 ether);
+    }
+
+    function test_adminCanSendToTrading() public {
+        _activate(alice, 1);
+        address ops = makeAddr("ops");
+        vm.prank(ops);
+        vm.expectRevert("NOT_AUTH");
+        funder.sendToTrading(5 ether);
+        accounts.addAdmin(ops);
+        uint256 outBefore = funder.tradingCapitalOut();
+        vm.prank(ops);
+        funder.sendToTrading(5 ether);
+        assertEq(funder.tradingCapitalOut() - outBefore, 5 ether);
+        accounts.removeAdmin(ops);
+        vm.prank(ops);
+        vm.expectRevert("NOT_AUTH");
+        funder.sendToTrading(5 ether);
     }
 
     /* --------------------------- Daily rewards -------------------------- */
