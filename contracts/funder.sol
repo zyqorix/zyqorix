@@ -1,11 +1,21 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.36;
+pragma solidity 0.8.38;
 
 /*
  * ZYQORIX — Funder Module
- * The treasury. It holds members' wallet money, the 20% buffer and the trading profit. Trading capital is
- * tracked: money coming back from trading counts as profit only after all capital sent out has returned,
- * and only that profit can pay daily rewards. The owner can never take the payment token out.
+ * The treasury. It holds members' wallet money, what activations leave in it and the trading profit. The trading
+ * share of each activation is spent on trading and never comes back; `tradingCapitalOut` only counts it. Every USDT
+ * returned through `fundRewards` or the funding wallets is trading profit and enters the reward pool, which alone
+ * pays out daily and generation rewards. The owner can send any USDT held here, member deposits included, to the
+ * trading wallet with `sendToTrading` (owner 2026-11-09, disclosed to members; not capped to the surplus, so an
+ * oversized send leaves withdrawals failing until the treasury is refilled). The owner can also relink the gateway
+ * and rewards addresses (setGateway, setRewards), and whatever they point at controls this USDT. The trading wallet can never be a funding wallet: returned trading capital would then book as profit,
+ * and member deposits would pay daily rewards. Only profit may land in a funding wallet.
+ *
+ * Funding wallets: up to MAX_WALLETS client wallets (for example where exchange withdrawals land) approve this
+ * funder once. `pullFunding` (anyone, and rewards on its own when the reward pool is short) moves each wallet's
+ * USDT, up to its allowance, in here and books it exactly like `fundRewards`: all of it to the reward pool.
+ * There is no funder migration: the address is permanent; the owner relinks gateway and rewards instead.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -15,6 +25,7 @@ pragma solidity 0.8.36;
 /// @notice The subset of the BEP20 / ERC20 interface this contract uses.
 interface IERC20 {
     function balanceOf(address account) external view returns (uint256);
+    function allowance(address owner, address spender) external view returns (uint256);
     function transfer(address to, uint256 value) external returns (bool);
     function transferFrom(address from, address to, uint256 value) external returns (bool);
     function approve(address spender, uint256 value) external returns (bool);
@@ -37,7 +48,7 @@ interface IZyqorixAccounts {
 /// @title IZyqorixRewards
 /// @notice Told when trading profit arrives.
 interface IZyqorixRewards {
-    /// @notice Add `amount` of trading profit to the daily pool.
+    /// @notice Told that `amount` of trading profit entered this funder's reward pool (event only).
     function notifyProfit(uint256 amount) external;
 }
 
@@ -54,30 +65,40 @@ interface IZyqorixLiquidity {
 /* ========================================================================== */
 /// @title ZyqorixFunder
 /// @author ZYQORIX
-/// @notice Holds the ZYQORIX payment token. `pay` is gateway-only and the activation flows are rewards-only.
-/// @dev The gateway and rewards addresses can each be set once, so a swapped contract can't reach this money.
+/// @notice Holds the ZYQORIX payment token. `pay` is gateway-only; `sendToTrading` is rewards or the accounts owner;
+///         the other activation flows are rewards-only.
+/// @dev The owner can relink the gateway and rewards addresses at any time (owner 2026-11-04), so a future
+///      rewards or gateway change needs no new funder. Whoever holds the accounts owner key decides who can reach
+///      this money.
 contract ZyqorixFunder {
     /* ------------------------------- Wiring ---------------------------- */
     /// @notice The accounts contract — the source of the owner. Immutable.
     IZyqorixAccounts public immutable accounts;
-    /// @notice The payment token this funder pays out (USDT on BSC). Immutable.
-    address public immutable token;
-    /// @notice The only address allowed to call `pay`. Set once.
+    /// @notice The payment token this funder pays out: USDT at its BSC mainnet address. The anvil testnet
+    ///         has a mock there (chain/script/deploy-usdt.js).
+    address public constant token = 0x55d398326f99059fF775485246999027B3197955;
+    /// @notice The only address allowed to call `pay`. Owner-set, relinkable.
     address public gateway;
-    /// @notice The only address allowed to run the activation flows. Set once.
+    /// @notice The only address allowed to run the activation flows. Owner-set, relinkable.
     address public rewards;
     /// @notice Where the activation's trading share goes. Owner-set.
     address public tradingWallet;
 
     /* --------------------------- Trading ledger ------------------------ */
-    /// @notice Total USDT ever sent to the trading wallet.
+    /// @notice Total USDT ever sent to the trading wallet. A running total only: that capital is not repaid.
     uint256 public tradingCapitalOut;
-    /// @notice Total of that capital returned through `fundRewards`.
-    uint256 public tradingCapitalReturned;
-    /// @notice Returned capital here that can be sent back to trading with `redeployCapital`.
-    uint256 public capitalHeld;
     /// @notice Trading profit here and not yet claimed. The only money daily rewards can use.
     uint256 public rewardPool;
+
+    /* --------------------------- Funding wallets ----------------------- */
+    /// @notice The most funding wallets at once. Bounds the gas a withdrawal spends pulling.
+    uint256 public constant MAX_WALLETS = 5;
+    /// @notice The client wallets whose approved USDT funds the reward pool. Empty disables pulling.
+    address[] private _wallets;
+    /// @notice True for each current funding wallet.
+    mapping(address => bool) public isFundingWallet;
+
+    uint256 private _status = 1; // 1 = not entered, 2 = entered
 
     /* ------------------------------- Events ---------------------------- */
     /// @notice Emitted when the gateway pays `amount` to `to`.
@@ -93,26 +114,29 @@ contract ZyqorixFunder {
     /// @notice Emitted when the trading wallet is changed.
     /// @param wallet The new trading wallet.
     event TradingWalletSet(address indexed wallet);
-    /// @notice Emitted when an activation's trading share goes out, or returned capital is sent back.
+    /// @notice Emitted when USDT goes to the trading wallet: an activation's trading share or an owner send.
     /// @param wallet The trading wallet.
     /// @param amount The amount sent.
     event TradingCapitalSent(address indexed wallet, uint256 amount);
-    /// @notice Emitted when `fundRewards` is called.
-    /// @param from The sender.
-    /// @param capitalReturned The part that repaid trading capital.
-    /// @param profit The part that counted as profit and entered the reward pool.
-    event TradingReturned(address indexed from, uint256 capitalReturned, uint256 profit);
+    /// @notice Emitted when trading profit enters the reward pool, through `fundRewards` or `pullFunding`.
+    /// @param from The sender (this funder itself for `pullFunding`).
+    /// @param amount The amount added to the reward pool.
+    event RewardsFunded(address indexed from, uint256 amount);
     /// @notice Emitted when an activation's liquidity share is sent.
     /// @param liquidity The liquidity contract.
     /// @param amount The amount offered.
     /// @param routed True if the liquidity contract took it; false leaves it here.
     event LiquidityRouted(address indexed liquidity, uint256 amount, bool routed);
-    /// @notice Emitted when this funder takes over another funder's ledger.
-    /// @param capitalOut The trading capital out.
-    /// @param capitalReturned The trading capital returned.
-    /// @param held The returned capital held.
-    /// @param pool The reward pool.
-    event LedgerImported(uint256 capitalOut, uint256 capitalReturned, uint256 held, uint256 pool);
+    /// @notice Emitted when a funding wallet is added.
+    /// @param wallet The wallet.
+    event FundingWalletAdded(address indexed wallet);
+    /// @notice Emitted when a funding wallet is removed.
+    /// @param wallet The wallet.
+    event FundingWalletRemoved(address indexed wallet);
+    /// @notice Emitted for each funding wallet `pullFunding` took USDT from.
+    /// @param wallet The funding wallet.
+    /// @param amount The amount pulled.
+    event FundingPulled(address indexed wallet, uint256 amount);
     /// @notice Emitted when the owner moves tokens out of the funder.
     /// @param token The token moved.
     /// @param to The recipient.
@@ -126,16 +150,22 @@ contract ZyqorixFunder {
         _;
     }
 
+    /// @dev Prevents nested calls into the funding paths. Reverts REENTRANCY.
+    modifier nonReentrant() {
+        require(_status == 1, "REENTRANCY");
+        _status = 2;
+        _;
+        _status = 1;
+    }
+
     /* ----------------------------- Constructor ------------------------- */
-    /// @notice Deploy the funder. Call `setGateway` once the gateway exists.
+    /// @notice Deploy the funder. Call `setGateway` when the gateway exists.
     /// @param accountsAddr The deployed ZYQORIX accounts contract.
-    /// @param tokenAddr The payment token.
-    /// @dev Reverts ZERO_ADDRESS / NOT_CONTRACT.
-    constructor(address accountsAddr, address tokenAddr) {
-        require(accountsAddr != address(0) && tokenAddr != address(0), "ZERO_ADDRESS");
-        require(accountsAddr.code.length > 0 && tokenAddr.code.length > 0, "NOT_CONTRACT");
+    /// @dev Reverts ZERO_ADDRESS / NOT_CONTRACT (also when USDT has no code here).
+    constructor(address accountsAddr) {
+        require(accountsAddr != address(0), "ZERO_ADDRESS");
+        require(accountsAddr.code.length > 0 && token.code.length > 0, "NOT_CONTRACT");
         accounts = IZyqorixAccounts(accountsAddr);
-        token = tokenAddr;
     }
 
     /* ============================ GATEWAY ============================= */
@@ -149,29 +179,14 @@ contract ZyqorixFunder {
         emit Paid(to, amount);
     }
 
-    /// @notice Take over the trading and reward ledger when this funder replaces another. Gateway-only, and only
-    ///         on an empty ledger, so a migration can't add to or overwrite real numbers.
-    /// @param capitalOut The old funder's `tradingCapitalOut`.
-    /// @param capitalReturned The old funder's `tradingCapitalReturned`.
-    /// @param held The old funder's `capitalHeld`.
-    /// @param pool The old funder's `rewardPool`.
-    /// @dev Reverts NOT_GATEWAY / LEDGER_NOT_EMPTY.
-    function importLedger(uint256 capitalOut, uint256 capitalReturned, uint256 held, uint256 pool) external {
-        require(msg.sender == gateway, "NOT_GATEWAY");
-        require(tradingCapitalOut == 0 && rewardPool == 0, "LEDGER_NOT_EMPTY");
-        tradingCapitalOut = capitalOut;
-        tradingCapitalReturned = capitalReturned;
-        capitalHeld = held;
-        rewardPool = pool;
-        emit LedgerImported(capitalOut, capitalReturned, held, pool);
-    }
-
     /* ============================= REWARDS ============================= */
-    /// @notice Send an activation's trading share to the trading wallet and record it as capital out.
+    /// @notice Send USDT to the trading wallet and record it as capital out: an activation's trading share (rewards)
+    ///         or any amount the owner chooses (owner 2026-11-09).
     /// @param amount The amount to send.
-    /// @dev Rewards-only. Reverts NOT_REWARDS / TRADING_WALLET_NOT_SET.
+    /// @dev Rewards or the accounts owner. Not capped to the surplus: an owner send can include member deposits.
+    ///      Reverts NOT_REWARDS (any other caller) / TRADING_WALLET_NOT_SET.
     function sendToTrading(uint256 amount) external {
-        require(msg.sender == rewards, "NOT_REWARDS");
+        require(msg.sender == rewards || msg.sender == accounts.owner(), "NOT_REWARDS");
         require(tradingWallet != address(0), "TRADING_WALLET_NOT_SET");
         tradingCapitalOut += amount;
         _safeTransfer(token, tradingWallet, amount);
@@ -195,9 +210,9 @@ contract ZyqorixFunder {
         emit LiquidityRouted(liquidity, amount, routed);
     }
 
-    /// @notice Take `amount` out of the reward pool ledger for a member's daily claim. The USDT stays here and
-    ///         backs their wallet balance.
-    /// @param amount The amount claimed.
+    /// @notice Take `amount` out of the reward pool ledger when a member's daily or generation reward credit
+    ///         leaves their wallet balance (a withdrawal or an activation). The USDT stays here until paid.
+    /// @param amount The reward-credit part being spent.
     /// @dev Rewards-only. Reverts NOT_REWARDS / INSUFFICIENT_REWARD_POOL.
     function drawRewardPool(uint256 amount) external {
         require(msg.sender == rewards, "NOT_REWARDS");
@@ -206,74 +221,99 @@ contract ZyqorixFunder {
     }
 
     /* ============================= TRADING ============================= */
-    /// @notice Return money from trading. It repays outstanding capital first; only what is left is profit,
-    ///         which enters the reward pool. A plain transfer to this address does not count. Approve first.
+    /// @notice Send trading profit into the reward pool. All of it counts: trading capital is not repaid. A plain
+    ///         transfer to this address does not count. Approve first.
     /// @param amount The amount to pull from the caller.
     /// @dev Reverts REWARDS_NOT_SET / ZERO_AMOUNT.
-    function fundRewards(uint256 amount) external {
+    function fundRewards(uint256 amount) external nonReentrant {
         require(rewards != address(0), "REWARDS_NOT_SET");
         require(amount > 0, "ZERO_AMOUNT");
         uint256 balBefore = IERC20(token).balanceOf(address(this));
-        (bool ok, bytes memory data) = token.call(
-            abi.encodeWithSelector(IERC20.transferFrom.selector, msg.sender, address(this), amount)
-        );
-        require(ok && (data.length == 0 || abi.decode(data, (bool))), "TRANSFER_FROM_FAILED");
-        uint256 received = IERC20(token).balanceOf(address(this)) - balBefore;
+        require(_tryTransferFrom(msg.sender, amount), "TRANSFER_FROM_FAILED");
+        _book(msg.sender, IERC20(token).balanceOf(address(this)) - balBefore);
+    }
 
-        uint256 outstanding = tradingCapitalOut - tradingCapitalReturned;
-        uint256 capital = received < outstanding ? received : outstanding;
-        uint256 profit = received - capital;
-        tradingCapitalReturned += capital;
-        capitalHeld += capital;
-        if (profit > 0) {
-            rewardPool += profit;
-            IZyqorixRewards(rewards).notifyProfit(profit);
+    /// @notice Pull every funding wallet's USDT, each up to its allowance to this funder, and book it like
+    ///         `fundRewards`. Anyone can call it; rewards calls it when the reward pool is short. A wallet whose
+    ///         transfer fails is skipped, so it can't hold up the others.
+    /// @return amount The total booked (0 when nothing was pending).
+    /// @dev Reverts REWARDS_NOT_SET.
+    function pullFunding() external nonReentrant returns (uint256 amount) {
+        require(rewards != address(0), "REWARDS_NOT_SET");
+        uint256 balBefore = IERC20(token).balanceOf(address(this));
+        uint256 count = _wallets.length;
+        for (uint256 i = 0; i < count; i++) {
+            address wallet = _wallets[i];
+            uint256 part = _pending(wallet);
+            if (part == 0 || !_tryTransferFrom(wallet, part)) continue;
+            emit FundingPulled(wallet, part);
         }
-        emit TradingReturned(msg.sender, capital, profit);
+        amount = IERC20(token).balanceOf(address(this)) - balBefore;
+        if (amount > 0) _book(address(this), amount);
     }
 
     /* ============================== OWNER ============================== */
-    /// @notice Set the only address allowed to call `pay`. Owner-only, and only once.
+    /// @notice Set the only address allowed to call `pay`. Owner-only; can be changed again later.
     /// @param gatewayAddr The gateway contract.
-    /// @dev Reverts ZERO_ADDRESS / NOT_CONTRACT / ALREADY_SET.
+    /// @dev Reverts ZERO_ADDRESS / NOT_CONTRACT / SAME_GATEWAY.
     function setGateway(address gatewayAddr) external onlyOwner {
         require(gatewayAddr != address(0), "ZERO_ADDRESS");
         require(gatewayAddr.code.length > 0, "NOT_CONTRACT");
-        require(gateway == address(0), "ALREADY_SET");
+        require(gatewayAddr != gateway, "SAME_GATEWAY");
         gateway = gatewayAddr;
         emit GatewaySet(gatewayAddr);
     }
 
-    /// @notice Set the only address allowed to run the activation flows. Owner-only, and only once.
+    /// @notice Set the only address allowed to run the activation flows. Owner-only; can be changed again later.
+    ///         Relinking moves no member ledger: balances stay in the old rewards contract.
     /// @param rewardsAddr The rewards contract.
-    /// @dev Reverts ZERO_ADDRESS / NOT_CONTRACT / ALREADY_SET.
+    /// @dev Reverts ZERO_ADDRESS / NOT_CONTRACT / SAME_REWARDS.
     function setRewards(address rewardsAddr) external onlyOwner {
         require(rewardsAddr != address(0), "ZERO_ADDRESS");
         require(rewardsAddr.code.length > 0, "NOT_CONTRACT");
-        require(rewards == address(0), "ALREADY_SET");
+        require(rewardsAddr != rewards, "SAME_REWARDS");
         rewards = rewardsAddr;
         emit RewardsSet(rewardsAddr);
     }
 
     /// @notice Set the trading wallet. Owner-only.
-    /// @param wallet The new trading wallet.
-    /// @dev Reverts ZERO_ADDRESS.
+    /// @param wallet The new trading disbursement contract.
+    /// @dev Reverts ZERO_ADDRESS / FUNDING_WALLET.
     function setTradingWallet(address wallet) external onlyOwner {
         require(wallet != address(0), "ZERO_ADDRESS");
+        require(!isFundingWallet[wallet], "FUNDING_WALLET");
         tradingWallet = wallet;
         emit TradingWalletSet(wallet);
     }
 
-    /// @notice Send returned capital back to the trading wallet, so trading can keep running. Owner-only.
-    /// @param amount The amount to send, at most `capitalHeld`.
-    /// @dev Reverts TRADING_WALLET_NOT_SET / INSUFFICIENT_CAPITAL.
-    function redeployCapital(uint256 amount) external onlyOwner {
-        require(tradingWallet != address(0), "TRADING_WALLET_NOT_SET");
-        require(amount <= capitalHeld, "INSUFFICIENT_CAPITAL");
-        capitalHeld -= amount;
-        tradingCapitalOut += amount;
-        _safeTransfer(token, tradingWallet, amount);
-        emit TradingCapitalSent(tradingWallet, amount);
+    /// @notice Add a funding wallet. It must still approve this funder before anything is pulled from it.
+    /// @param wallet The wallet.
+    /// @dev Owner-only. Reverts ZERO_ADDRESS / TRADING_WALLET / ALREADY_ADDED / TOO_MANY_WALLETS.
+    function addFundingWallet(address wallet) external onlyOwner {
+        require(wallet != address(0), "ZERO_ADDRESS");
+        require(wallet != tradingWallet, "TRADING_WALLET");
+        require(!isFundingWallet[wallet], "ALREADY_ADDED");
+        require(_wallets.length < MAX_WALLETS, "TOO_MANY_WALLETS");
+        _wallets.push(wallet);
+        isFundingWallet[wallet] = true;
+        emit FundingWalletAdded(wallet);
+    }
+
+    /// @notice Remove a funding wallet. Nothing more is pulled from it, whatever its allowance.
+    /// @param wallet The wallet.
+    /// @dev Owner-only. Reverts NOT_FUNDING_WALLET.
+    function removeFundingWallet(address wallet) external onlyOwner {
+        require(isFundingWallet[wallet], "NOT_FUNDING_WALLET");
+        uint256 last = _wallets.length - 1;
+        for (uint256 i = 0; i < last; i++) {
+            if (_wallets[i] == wallet) {
+                _wallets[i] = _wallets[last];
+                break;
+            }
+        }
+        _wallets.pop();
+        isFundingWallet[wallet] = false;
+        emit FundingWalletRemoved(wallet);
     }
 
     /// @notice Recover a token sent here by mistake. Owner-only. The payment token can never leave this way.
@@ -293,6 +333,56 @@ contract ZyqorixFunder {
     /// @return The token balance.
     function available() external view returns (uint256) {
         return IERC20(token).balanceOf(address(this));
+    }
+
+    /// @notice The current funding wallets.
+    /// @return The wallets, in pull order.
+    function fundingWallets() external view returns (address[] memory) {
+        return _wallets;
+    }
+
+    /// @notice How many funding wallets are set.
+    /// @return The count.
+    function walletCount() external view returns (uint256) {
+        return _wallets.length;
+    }
+
+    /// @notice What `pullFunding` would take from one wallet: its USDT, capped by its allowance to this funder.
+    /// @param wallet The wallet (counted whether or not it is a funding wallet).
+    /// @return The amount.
+    function pendingOf(address wallet) external view returns (uint256) {
+        return _pending(wallet);
+    }
+
+    /// @notice What `pullFunding` would take now across every funding wallet.
+    /// @return total The total (0 when no funding wallet is set).
+    function pendingFunding() external view returns (uint256 total) {
+        uint256 count = _wallets.length;
+        for (uint256 i = 0; i < count; i++) {
+            total += _pending(_wallets[i]);
+        }
+    }
+
+    /* ---------------------------- Internals ---------------------------- */
+    /// @dev Book `received` USDT of trading profit into the reward pool.
+    function _book(address from, uint256 received) internal {
+        rewardPool += received;
+        IZyqorixRewards(rewards).notifyProfit(received);
+        emit RewardsFunded(from, received);
+    }
+
+    function _pending(address wallet) internal view returns (uint256) {
+        uint256 balance = IERC20(token).balanceOf(wallet);
+        uint256 allowed = IERC20(token).allowance(wallet, address(this));
+        return balance < allowed ? balance : allowed;
+    }
+
+    /// @dev Pull `value` USDT from `from`. Works with tokens returning bool AND non-returning tokens; returns false
+    ///      instead of reverting.
+    function _tryTransferFrom(address from, uint256 value) internal returns (bool) {
+        (bool ok, bytes memory data) =
+            token.call(abi.encodeWithSelector(IERC20.transferFrom.selector, from, address(this), value));
+        return ok && (data.length == 0 || (data.length >= 32 && abi.decode(data, (bool))));
     }
 
     /* ---------------------- Safe BEP20 helpers ------------------------- */

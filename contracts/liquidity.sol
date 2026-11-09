@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.36;
+pragma solidity 0.8.38;
 
 /*
  * ZYQORIX — Liquidity Module
@@ -12,8 +12,8 @@ pragma solidity 0.8.36;
  *   1) SWAP_ONLY      — swap all of it to TOKEN and hold it here; the owner sweeps with tokenWithdraw().
  *   2) SEND_TO_WALLET — forward the USDT as-is to the admin-set `tradingWallet`.
  *
- * Changed from COC: USDT, TOKEN and the PancakeSwap addresses are constructor arguments, because the
- * ZYQORIX token is not deployed yet and local tests need mocks.
+ * Changed from COC: the PancakeSwap addresses are constructor arguments, so local tests can use mocks.
+ * USDT and TOKEN are constants at their BSC mainnet addresses; the anvil testnet has a mock at each.
  *
  * `lockLiquidity` is a one-way switch. Once called, nobody can take liquidity or tokens out, including the
  * owner, and the mode stays ADD_LIQUIDITY for good. It can never be undone.
@@ -321,16 +321,16 @@ abstract contract ReentrancyGuard {
 /// @dev Implements the `ILiquidity` surface the plan calls: `addLiquidityUSDT(uint256,uint24,uint256)` +
 ///      `TOKENID()`. The V2 toggle is a stored `liquidityMode` (not a new parameter) so the plan's call is
 ///      unchanged. All V3 interfaces, FullMath/TickMath, and Ownable/Admin/ReentrancyGuard are inlined
-///      so it compiles with zero external imports. USDT, TOKEN and the PancakeSwap addresses are
-///      immutable constructor arguments. TOKENID is 0 until an admin runs the one-time setup and mints the position,
+///      so it compiles with zero external imports. USDT and TOKEN are constants at their BSC mainnet
+///      addresses; the PancakeSwap addresses are immutable constructor arguments. TOKENID is 0 until an admin runs the one-time setup and mints the position,
 ///      at which point the membership hub routes here (otherwise it credits its liquidity wallet).
 ///      Setup order: depositUSDT/depositToken → initializePool → initializeApproval → initializePosition.
 contract ZyqorixLiquidity is AdminOwnable, ReentrancyGuard, IERC721Receiver {
     /* ------------------------- Immutables: tokens --------------------- */
-    /// @notice Paired stablecoin (BSC-USD on BSC, 18 dp).
-    address public immutable USDT;
-    /// @notice The ZYQORIX token (18 dp) — the token paired against USDT in the managed V3 position.
-    address public immutable TOKEN;
+    /// @notice Paired stablecoin: BSC-USD at its mainnet address (18 dp).
+    address public constant USDT = 0x55d398326f99059fF775485246999027B3197955;
+    /// @notice The ZYQORIX token (18 dp) at its BSC mainnet address, paired against USDT in the managed V3 position.
+    address public constant TOKEN = 0x43ADE7aE5E14e6dadD0f6967a0aDEADe56095e70;
 
     /* --------------------- Immutables: PancakeSwap V3 ----------------- */
     /// @dev PancakeSwap V3 NonfungiblePositionManager on BSC mainnet (mints/holds the position NFT).
@@ -415,20 +415,14 @@ contract ZyqorixLiquidity is AdminOwnable, ReentrancyGuard, IERC721Receiver {
     event SwappedOnly(uint256 usdtIn, uint256 tokenOut);
 
     /// @notice Deploys the manager, setting the deployer as owner.
-    /// @dev Owner is `msg.sender` (via Ownable). Reverts ZERO_ADDRESS, SAME_TOKEN, or NOT_CONTRACT if any
-    ///      address has no code. These addresses can never be changed.
-    /// @param usdt The paired stablecoin (BSC mainnet 0x55d398326f99059fF775485246999027B3197955).
-    /// @param token The ZYQORIX token.
+    /// @dev Owner is `msg.sender` (via Ownable). Reverts ZERO_ADDRESS, or NOT_CONTRACT if any address,
+    ///      USDT and TOKEN included, has no code. These addresses can never be changed.
     /// @param positionManager PancakeSwap V3 NonfungiblePositionManager (BSC mainnet 0x46A15B0b27311cedF172AB29E4f4766fbE7F4364).
     /// @param swapRouter PancakeSwap V3 SwapRouter (BSC mainnet 0x1b81D678ffb9C0263b24A97847620C99d213eB14).
-    constructor(address usdt, address token, address positionManager, address swapRouter) Ownable(msg.sender) {
-        require(usdt != address(0) && token != address(0), "ZERO_ADDRESS");
+    constructor(address positionManager, address swapRouter) Ownable(msg.sender) {
         require(positionManager != address(0) && swapRouter != address(0), "ZERO_ADDRESS");
-        require(usdt != token, "SAME_TOKEN");
-        require(usdt.code.length != 0 && token.code.length != 0, "NOT_CONTRACT");
+        require(USDT.code.length != 0 && TOKEN.code.length != 0, "NOT_CONTRACT");
         require(positionManager.code.length != 0 && swapRouter.code.length != 0, "NOT_CONTRACT");
-        USDT = usdt;
-        TOKEN = token;
         POSITION_MANAGER = INonfungiblePositionManager(positionManager);
         SWAP_ROUTER = ISwapRouter(swapRouter);
     }

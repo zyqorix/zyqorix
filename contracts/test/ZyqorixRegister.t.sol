@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.36;
+pragma solidity 0.8.38;
 
 import {Test} from "forge-std/Test.sol";
 import {ZyqorixAccounts} from "../accounts.sol";
@@ -25,11 +25,17 @@ contract MockToken {
 contract MockRewards {
     mapping(address => uint256) public walletBalance;
     mapping(address => bool) public isActive;
+    address public gateway;
+    function setGateway(address g) external { gateway = g; }
     function creditDeposit(address u, uint256 v) external { walletBalance[u] += v; }
+    mapping(address => bool) public isAgent;
     function setActive(address u, bool v) external { isActive[u] = v; }
+    function setAgent(address u, bool v) external { isAgent[u] = v; }
 }
 
 contract ZyqorixRegisterTest is Test {
+    /// @dev USDT's BSC mainnet address, hardcoded in funder, gateway, liquidity and the exchanger.
+    address constant USDT_ADDR = 0x55d398326f99059fF775485246999027B3197955;
     ZyqorixAccounts accounts;
     ZyqorixFunder funder;
     ZyqorixGateway gateway;
@@ -44,13 +50,16 @@ contract ZyqorixRegisterTest is Test {
     address stranger = makeAddr("stranger");
 
     function setUp() public {
-        usdt = new MockToken();
+        // USDT's mainnet address is hardcoded in the contracts: etch the mock there.
+        vm.etch(USDT_ADDR, type(MockToken).runtimeCode);
+        usdt = MockToken(USDT_ADDR);
         accounts = new ZyqorixAccounts();
         accounts.addAdmin(hub);
-        funder = new ZyqorixFunder(address(accounts), address(usdt));
-        gateway = new ZyqorixGateway(address(accounts), address(usdt), address(funder));
+        funder = new ZyqorixFunder(address(accounts));
+        gateway = new ZyqorixGateway(address(accounts), address(funder));
         funder.setGateway(address(gateway));
         rewards = new MockRewards();
+        rewards.setGateway(address(gateway));
         gateway.setRewards(address(rewards));
         reg = new ZyqorixRegister(address(accounts), address(gateway));
         accounts.addAdmin(address(reg));
@@ -119,6 +128,23 @@ contract ZyqorixRegisterTest is Test {
         _register(bob, alice);
         assertEq(_sponsor(bob), alice);
         assertEq(accounts.totalDirects(alice), 1);
+    }
+
+    function test_inactiveMemberCannotSponsor() public {
+        _register(alice, owner);
+        reg.setInitialDeposit(0);
+        vm.prank(bob, bob);
+        vm.expectRevert("SPONSOR_NOT_ACTIVE");
+        reg.register(alice);
+        assertFalse(accounts.isUser(bob));
+    }
+
+    function test_inactiveAgentCanSponsor() public {
+        _register(alice, owner);
+        rewards.setAgent(alice, true); // no capping, but an agent
+        reg.setInitialDeposit(0);
+        _register(bob, alice);
+        assertEq(_sponsor(bob), alice);
     }
 
     function test_failedDepositUndoesRegistration() public {

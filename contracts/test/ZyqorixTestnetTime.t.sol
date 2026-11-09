@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.36;
+pragma solidity 0.8.38;
 
 import {Test} from "forge-std/Test.sol";
 import {ZyqorixAccounts} from "../accounts.sol";
 import {ZyqorixFunder} from "../funder.sol";
 import {ZyqorixGateway} from "../gateway.sol";
 import {ZyqorixRewards} from "../rewards.sol";
-import {ZyqorixToken} from "../zqrtoken.sol";
+import {ZQRMock} from "../zqrmock.sol";
 import {ZyqorixVesting} from "../vesting.sol";
 import {MockLiquidity, MockUsdt} from "./ZyqorixRewards.t.sol";
 
 /// @dev The testnet clock from script/zyqorix/Deploy.s.sol: a day is 1 minute and a month is 30 minutes.
 contract ZyqorixTestnetTimeTest is Test {
+    /// @dev USDT's BSC mainnet address, hardcoded in funder, gateway, liquidity and the exchanger.
+    address constant USDT_ADDR = 0x55d398326f99059fF775485246999027B3197955;
+    address constant ZQR_ADDR = 0x43ADE7aE5E14e6dadD0f6967a0aDEADe56095e70;
     uint256 constant START = 1_800_000_000; // a whole number of 30-minute periods
     uint256 constant DAY = 1 minutes;
     uint256 constant MONTH = 30 minutes;
@@ -21,7 +24,7 @@ contract ZyqorixTestnetTimeTest is Test {
     ZyqorixGateway gateway;
     ZyqorixRewards rewards;
     ZyqorixVesting vesting;
-    ZyqorixToken zqr;
+    ZQRMock zqr;
     MockUsdt usdt;
 
     address owner = address(this);
@@ -31,15 +34,20 @@ contract ZyqorixTestnetTimeTest is Test {
 
     function setUp() public {
         vm.warp(START);
-        usdt = new MockUsdt();
+        // USDT's mainnet address is hardcoded in the contracts: etch the mock there.
+        vm.etch(USDT_ADDR, type(MockUsdt).runtimeCode);
+        usdt = MockUsdt(USDT_ADDR);
         accounts = new ZyqorixAccounts();
-        funder = new ZyqorixFunder(address(accounts), address(usdt));
-        gateway = new ZyqorixGateway(address(accounts), address(usdt), address(funder));
+        funder = new ZyqorixFunder(address(accounts));
+        gateway = new ZyqorixGateway(address(accounts), address(funder));
         gateway.setWithdrawalCooldown(DAY);
         funder.setGateway(address(gateway));
         funder.setTradingWallet(trading);
-        zqr = new ZyqorixToken();
-        vesting = new ZyqorixVesting(address(accounts), address(zqr), MONTH);
+        // ZQR's mainnet address is hardcoded in vesting.sol: etch the mock there and mint the full supply.
+        vm.etch(ZQR_ADDR, type(ZQRMock).runtimeCode);
+        zqr = ZQRMock(ZQR_ADDR);
+        zqr.mint(address(this), zqr.MAX_SUPPLY());
+        vesting = new ZyqorixVesting(address(accounts), MONTH);
         zqr.transfer(address(vesting), 1_000_000 ether);
         rewards = new ZyqorixRewards(address(accounts), address(gateway), address(vesting), DAY);
         accounts.addAdmin(address(rewards));
@@ -101,6 +109,7 @@ contract ZyqorixTestnetTimeTest is Test {
     }
 
     function test_secondTierPairOpensAfter60Minutes() public {
+        _activate(alice); // the counter runs from the first activation, at START
         vm.warp(START + 60 * DAY - 1);
         assertFalse(rewards.isTierUnlocked(alice, 2));
         vm.warp(START + 60 * DAY);
@@ -155,20 +164,19 @@ contract ZyqorixTestnetTimeTest is Test {
         address gatewayAddr = address(gateway);
         address accountsAddr = address(accounts);
         address vestingAddr = address(vesting);
-        address zqrAddr = address(zqr);
 
         vm.expectRevert("BAD_DAY");
         new ZyqorixRewards(accountsAddr, gatewayAddr, vestingAddr, 2 minutes);
         vm.expectRevert("BAD_MONTH");
-        new ZyqorixVesting(accountsAddr, zqrAddr, 1 hours);
+        new ZyqorixVesting(accountsAddr, 1 hours);
 
         vm.chainId(56);
         vm.expectRevert("BAD_DAY");
         new ZyqorixRewards(accountsAddr, gatewayAddr, vestingAddr, DAY);
         vm.expectRevert("BAD_MONTH");
-        new ZyqorixVesting(accountsAddr, zqrAddr, MONTH);
+        new ZyqorixVesting(accountsAddr, MONTH);
 
         assertEq(new ZyqorixRewards(accountsAddr, gatewayAddr, vestingAddr, 1 days).DAY(), 1 days);
-        assertEq(new ZyqorixVesting(accountsAddr, zqrAddr, 30 days).MONTH(), 30 days);
+        assertEq(new ZyqorixVesting(accountsAddr, 30 days).MONTH(), 30 days);
     }
 }

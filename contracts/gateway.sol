@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.36;
+pragma solidity 0.8.38;
 
 /*
  * ZYQORIX — Gateway Module
@@ -48,6 +48,8 @@ interface IZyqorixAccounts {
 /// @title IZyqorixRewards
 /// @notice What the gateway needs from the rewards contract, which owns every balance record.
 interface IZyqorixRewards {
+    /// @notice The gateway the rewards contract accepts calls from.
+    function gateway() external view returns (address);
     /// @notice The wallet balance recorded for `user`.
     function walletBalance(address user) external view returns (uint256);
     /// @notice The agent rewards recorded for `user`.
@@ -76,18 +78,14 @@ interface IZyqorixFunder {
     function rewards() external view returns (address);
     /// @notice The funder's trading wallet.
     function tradingWallet() external view returns (address);
-    /// @notice Total USDT ever sent to the trading wallet.
-    function tradingCapitalOut() external view returns (uint256);
-    /// @notice Total of that capital returned.
-    function tradingCapitalReturned() external view returns (uint256);
-    /// @notice Returned capital held.
-    function capitalHeld() external view returns (uint256);
     /// @notice Trading profit not yet claimed.
     function rewardPool() external view returns (uint256);
     /// @notice Pay `amount` of the token to `to`.
     function pay(address to, uint256 amount) external;
-    /// @notice Take over another funder's ledger.
-    function importLedger(uint256 capitalOut, uint256 capitalReturned, uint256 held, uint256 pool) external;
+    /// @notice Book `amount` of the caller's token into the reward pool. The caller approves the funder.
+    function fundRewards(uint256 amount) external;
+    /// @notice Pull the funding wallets' approved USDT into the funder and book it. Permissionless.
+    function pullFunding() external returns (uint256 amount);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -141,13 +139,13 @@ contract ZyqorixGateway is ReentrancyGuard {
     /* ------------------------------- Wiring ---------------------------- */
     /// @notice The accounts contract — the single source of truth for isUser and authorization. Immutable.
     IZyqorixAccounts public immutable accounts;
-    /// @notice The payment token (USDT on BSC). Immutable.
-    address public immutable token;
+    /// @notice The payment token: USDT at its BSC mainnet address. The anvil testnet has a mock there.
+    address public constant token = 0x55d398326f99059fF775485246999027B3197955;
     /// @notice The current treasury. Changed by an admin with `setFunder` until `lockFunder`.
     IZyqorixFunder public funder;
     /// @notice True once `lockFunder` has fixed the funder and liquidity addresses for good.
     bool public funderLocked;
-    /// @notice The rewards contract. Set once by the owner. Deposits and withdrawals revert until set.
+    /// @notice The rewards contract. Owner-set, relinkable. Deposits and withdrawals revert until set.
     IZyqorixRewards public rewards;
     /// @notice The contract that swaps withdrawal fees. Zero = fees go back to the funder.
     address public liquidity;
@@ -159,6 +157,15 @@ contract ZyqorixGateway is ReentrancyGuard {
     uint256 public constant BPS_DENOMINATOR = 10_000;
     /// @notice Highest allowed withdrawal fee (50%), so a bad setting can't zero out a withdrawal.
     uint256 public constant MAX_WITHDRAWAL_FEE = 5_000;
+    /// @notice Gas the withdrawal must still hold when it tries the fee swap and burn. The swap runs inside a
+    ///         try/catch, so without this floor a wallet's gas estimate settles on a limit where the swap runs out
+    ///         of gas deep inside PancakeSwap and the fee silently stays in the funder (seen on BSC 2026-11-04:
+    ///         a 6 USDT fee needed about 290k for the whole withdrawal and the wallet sent 342k).
+    uint256 public constant FEE_SWAP_GAS = 450_000;
+    /// @notice Gas held back from the fee swap so a swap that runs out of gas still leaves enough to book the fee
+    ///         into the reward pool. Without it the swap gets 63/64 of what's left and the fallback can run dry,
+    ///         reverting the whole withdrawal.
+    uint256 public constant FEE_RETURN_GAS = 150_000;
     /// @notice Withdrawal fee in basis points. Starts at 10%.
     uint256 public withdrawal_fee = 1_000;
     /// @notice Smallest amount a member can `deposit`. Hub deposits through `depositFor` set their own amount.
@@ -170,8 +177,12 @@ contract ZyqorixGateway is ReentrancyGuard {
     mapping(address => uint256) public coolDown;
     /// @notice Seconds an account must wait between withdrawals. 0 disables the cooldown.
     uint256 public withdrawal_cooldown = 24 hours;
-    /// @notice Allowed withdrawal amounts. Defaults to {20, 50, 100} tokens (18-dp). Empty = any amount.
-    uint256[] public withdrawalDenominations;
+    /// @notice Smallest withdrawal (gross). Default 20 USDT.
+    uint256 public withdrawalMin = 20 ether;
+    /// @notice Largest withdrawal (gross). Default 100 USDT.
+    uint256 public withdrawalMax = 100 ether;
+    /// @notice Withdrawals must be a whole multiple of this. Default 20 USDT, so 20, 40, 60, 80 or 100.
+    uint256 public withdrawalStep = 20 ether;
 
     /// @notice Where swapped tokens go when the token has no burn function.
     address public constant BURN_ADDRESS = 0x000000000000000000000000000000000000dEaD;
@@ -200,11 +211,6 @@ contract ZyqorixGateway is ReentrancyGuard {
     event Swept(address indexed token, uint256 amount);
     /// @notice Emitted when the funder and liquidity addresses are fixed for good.
     event FunderLocked();
-    /// @notice Emitted when all USDT and the ledger move to a new funder.
-    /// @param oldFunder The funder replaced.
-    /// @param newFunder The new funder.
-    /// @param amount The USDT moved.
-    event FunderMigrated(address indexed oldFunder, address indexed newFunder, uint256 amount);
     /// @notice Emitted when the minimum deposit is changed.
     /// @param amount The new minimum.
     event MinDepositSet(uint256 amount);
@@ -229,9 +235,11 @@ contract ZyqorixGateway is ReentrancyGuard {
     /// @notice Emitted when the withdrawal cooldown is changed.
     /// @param cooldown The new cooldown in seconds (0 = disabled).
     event WithdrawalCooldownSet(uint256 cooldown);
-    /// @notice Emitted when the allowed withdrawal denominations are changed.
-    /// @param denominations The new set (empty = no restriction).
-    event WithdrawalDenominationsSet(uint256[] denominations);
+    /// @notice Emitted when the withdrawal amount rule is changed.
+    /// @param min The smallest withdrawal.
+    /// @param max The largest withdrawal.
+    /// @param step Withdrawals must be a multiple of this.
+    event WithdrawalLimitsSet(uint256 min, uint256 max, uint256 step);
 
     /* ------------------------------ Modifiers -------------------------- */
     /// @dev Restricts a function to the accounts OWNER. Reverts NOT_OWNER.
@@ -255,22 +263,16 @@ contract ZyqorixGateway is ReentrancyGuard {
     /* ----------------------------- Constructor ------------------------- */
     /// @notice Deploy the gateway. Afterwards the owner calls `funder.setGateway(this)`.
     /// @param accountsAddr The deployed ZYQORIX accounts contract.
-    /// @param tokenAddr The payment token.
-    /// @param funderAddr The initial funder; must pay out `tokenAddr`.
-    /// @dev Reverts ZERO_ADDRESS / NOT_CONTRACT / FUNDER_TOKEN_MISMATCH.
-    constructor(address accountsAddr, address tokenAddr, address funderAddr) {
-        require(accountsAddr != address(0) && tokenAddr != address(0) && funderAddr != address(0), "ZERO_ADDRESS");
-        require(accountsAddr.code.length > 0 && tokenAddr.code.length > 0 && funderAddr.code.length > 0, "NOT_CONTRACT");
-        require(IZyqorixFunder(funderAddr).token() == tokenAddr, "FUNDER_TOKEN_MISMATCH");
+    /// @param funderAddr The initial funder; must pay out `token`.
+    /// @dev Reverts ZERO_ADDRESS / NOT_CONTRACT (also when USDT has no code here) / FUNDER_TOKEN_MISMATCH.
+    constructor(address accountsAddr, address funderAddr) {
+        require(accountsAddr != address(0) && funderAddr != address(0), "ZERO_ADDRESS");
+        require(accountsAddr.code.length > 0 && token.code.length > 0 && funderAddr.code.length > 0, "NOT_CONTRACT");
+        require(IZyqorixFunder(funderAddr).token() == token, "FUNDER_TOKEN_MISMATCH");
         accounts = IZyqorixAccounts(accountsAddr);
-        token = tokenAddr;
         funder = IZyqorixFunder(funderAddr);
-        // Default withdrawal denominations: $20 / $50 / $100 (USDT, 18-dp).
-        withdrawalDenominations.push(20 ether);
-        withdrawalDenominations.push(50 ether);
-        withdrawalDenominations.push(100 ether);
         emit FunderSet(funderAddr);
-        emit WithdrawalDenominationsSet(withdrawalDenominations);
+        emit WithdrawalLimitsSet(withdrawalMin, withdrawalMax, withdrawalStep);
     }
 
     /* ============================ USER — DEPOSIT ======================== */
@@ -321,7 +323,8 @@ contract ZyqorixGateway is ReentrancyGuard {
 
     /* ============================ USER — WITHDRAW ======================= */
     /// @notice Withdraw `amount` of your wallet balance to your wallet address, minus the withdrawal fee.
-    /// @param amount The gross amount to debit from your wallet balance; must be an allowed denomination.
+    /// @param amount The gross amount to debit from your wallet balance: from `withdrawalMin` to `withdrawalMax`, in
+    ///        multiples of `withdrawalStep` (20, 40, 60, 80 or 100 USDT by default).
     function withdraw(uint256 amount) external nonReentrant whenNotPaused {
         _withdraw(msg.sender, amount);
     }
@@ -347,17 +350,18 @@ contract ZyqorixGateway is ReentrancyGuard {
         require(address(rewards) != address(0), "REWARDS_NOT_SET");
         require(rewards.isAgent(user), "NOT_AGENT");
         require(rewards.agentBalance(user) >= amount, "INSUFFICIENT_AGENT");
-        require(funderBalance() >= amount, "INSUFFICIENT_FUNDER");
         _checkCooldown(user);
 
         rewards.debitAgent(user, amount);
+        _requireFunderCovers(amount);
         funder.pay(user, amount);
         emit AgentWithdrawn(user, amount);
     }
 
     /* ============================== ADMIN ============================== */
-    /// @notice Change the funder. New deposits and withdrawals use it immediately. This moves no USDT or ledger,
-    ///         so once the funder holds money use `migrateFunder` instead.
+    /// @notice Change the funder. New deposits and withdrawals use it immediately. This moves no USDT or ledger
+    ///         and doesn't seal the old funder, so it's only for setup before any money arrives. There is no funder
+    ///         migration: once the funder holds money it stays the funder.
     /// @param funderAddr The new funder. It must pay out `token` and already name this contract as its
     ///        gateway, so a bad address can't stop withdrawals.
     /// @dev onlyAuth. Reverts FUNDER_LOCKED / ZERO_ADDRESS / NOT_CONTRACT / FUNDER_TOKEN_MISMATCH /
@@ -366,30 +370,9 @@ contract ZyqorixGateway is ReentrancyGuard {
         _setFunder(funderAddr);
     }
 
-    /// @notice Move to a new funder: all of the old funder's USDT, its trading and reward ledger, and every
-    ///         deposit and withdrawal from now on. Owner-only, and closed for good by `lockFunder`.
-    /// @param funderAddr The new funder. Besides the `setFunder` checks, it must already have this rewards
-    ///        contract and a trading wallet set, and an empty ledger, so activations and claims keep working.
-    /// @dev Reverts NOT_OWNER / SAME_FUNDER / FUNDER_NOT_LINKED / TRADING_WALLET_NOT_SET, the `setFunder` reverts,
-    ///      and LEDGER_NOT_EMPTY from the new funder.
-    function migrateFunder(address funderAddr) external onlyOwner nonReentrant {
-        IZyqorixFunder old = funder;
-        require(funderAddr != address(old), "SAME_FUNDER");
-        _setFunder(funderAddr);
-        IZyqorixFunder next = IZyqorixFunder(funderAddr);
-        require(next.rewards() == address(rewards), "FUNDER_NOT_LINKED");
-        require(next.tradingWallet() != address(0), "TRADING_WALLET_NOT_SET");
-
-        next.importLedger(
-            old.tradingCapitalOut(), old.tradingCapitalReturned(), old.capitalHeld(), old.rewardPool()
-        );
-        uint256 amount = IERC20(token).balanceOf(address(old));
-        if (amount > 0) old.pay(funderAddr, amount);
-        emit FunderMigrated(address(old), funderAddr, amount);
-    }
-
-    /// @notice Fix the funder and liquidity addresses for good. One-way. Call before taking real deposits, so
-    ///         deposits and the liquidity share can never be redirected. Owner-only.
+    /// @notice Fix the funder and liquidity addresses for good. One-way. Call before taking real deposits. It
+    ///         fixes only these two: the owner can still relink rewards here and the gateway and rewards on the
+    ///         funder, which control the funder's USDT. Owner-only.
     /// @dev Reverts LIQUIDITY_NOT_LOCKED unless the liquidity contract is set and has been locked first.
     function lockFunder() external onlyOwner {
         require(liquidity != address(0) && IZyqorixLiquidity(liquidity).liquidityLocked(), "LIQUIDITY_NOT_LOCKED");
@@ -397,13 +380,16 @@ contract ZyqorixGateway is ReentrancyGuard {
         emit FunderLocked();
     }
 
-    /// @notice Set the rewards contract. Owner-only, and only once: it decides who can draw on the funder.
+    /// @notice Set the rewards contract. Owner-only; can be changed again later (relink the funder's `setRewards`
+    ///         to the same address). It decides who can draw on the funder. Relinking moves no member ledger.
     /// @param rewardsAddr The rewards contract.
-    /// @dev Reverts ALREADY_SET / ZERO_ADDRESS / NOT_CONTRACT, and reverts if it has no `walletBalance`.
+    /// @dev Reverts ZERO_ADDRESS / SAME_REWARDS / NOT_CONTRACT / REWARDS_NOT_LINKED (its `gateway()` must be this
+    ///      contract, or every credit and debit would revert), and reverts if it has no `walletBalance`.
     function setRewards(address rewardsAddr) external onlyOwner {
-        require(address(rewards) == address(0), "ALREADY_SET");
         require(rewardsAddr != address(0), "ZERO_ADDRESS");
+        require(rewardsAddr != address(rewards), "SAME_REWARDS");
         require(rewardsAddr.code.length > 0, "NOT_CONTRACT");
+        require(IZyqorixRewards(rewardsAddr).gateway() == address(this), "REWARDS_NOT_LINKED");
         IZyqorixRewards(rewardsAddr).walletBalance(address(this));
         rewards = IZyqorixRewards(rewardsAddr);
         emit RewardsSet(rewardsAddr);
@@ -443,6 +429,9 @@ contract ZyqorixGateway is ReentrancyGuard {
     /// @param slippageBps The new tolerance, at most 5000 (the liquidity contract's limit).
     /// @dev onlyAuth. Reverts SLIPPAGE_TOO_HIGH.
     function setLiquiditySlippage(uint24 slippageBps) external onlyAuth {
+        // The liquidity contract's minimum out ignores the pool fee (1% on the ZQR pool), so anything below it
+        // would make every fee swap fail and silently stop the burn.
+        require(slippageBps >= 100, "SLIPPAGE_TOO_LOW");
         require(slippageBps <= 5_000, "SLIPPAGE_TOO_HIGH");
         liquiditySlippageBps = slippageBps;
         emit LiquiditySlippageSet(slippageBps);
@@ -464,16 +453,18 @@ contract ZyqorixGateway is ReentrancyGuard {
         emit WithdrawalCooldownSet(secondsBetween);
     }
 
-    /// @notice Set the allowed withdrawal amounts. Pass an empty array to allow any amount.
-    /// @param denoms The new set (each > 0).
-    /// @dev onlyAuth. Reverts ZERO_DENOM.
-    function setWithdrawalDenominations(uint256[] calldata denoms) external onlyAuth {
-        delete withdrawalDenominations;
-        for (uint256 i = 0; i < denoms.length; i++) {
-            require(denoms[i] > 0, "ZERO_DENOM");
-            withdrawalDenominations.push(denoms[i]);
-        }
-        emit WithdrawalDenominationsSet(withdrawalDenominations);
+    /// @notice Set the withdrawal amount rule: from `min` to `max`, in multiples of `step`. For example 20, 200, 20
+    ///         allows 20, 40, ... 200.
+    /// @param min The smallest withdrawal; a multiple of `step`.
+    /// @param max The largest withdrawal; a multiple of `step`, at least `min`.
+    /// @param step The multiple every withdrawal must be; above zero.
+    /// @dev onlyAuth. Reverts BAD_LIMITS.
+    function setWithdrawalLimits(uint256 min, uint256 max, uint256 step) external onlyAuth {
+        require(step > 0 && min > 0 && min <= max && min % step == 0 && max % step == 0, "BAD_LIMITS");
+        withdrawalMin = min;
+        withdrawalMax = max;
+        withdrawalStep = step;
+        emit WithdrawalLimitsSet(min, max, step);
     }
 
     /// @notice Forward any tokens sent here by mistake to the funder, restoring the zero balance.
@@ -516,22 +507,12 @@ contract ZyqorixGateway is ReentrancyGuard {
         return IERC20(token).balanceOf(address(funder));
     }
 
-    /// @notice The current allowed withdrawal amounts (empty = no restriction).
-    /// @return The list of allowed amounts.
-    function getWithdrawalDenominations() external view returns (uint256[] memory) {
-        return withdrawalDenominations;
-    }
-
-    /// @notice Whether `amount` is an allowed withdrawal (true for any amount when the set is empty).
+    /// @notice Whether `amount` is an allowed withdrawal: from `withdrawalMin` to `withdrawalMax`, in multiples of
+    ///         `withdrawalStep`.
     /// @param amount The gross amount to check.
     /// @return True if allowed.
-    function isAllowedDenomination(uint256 amount) public view returns (bool) {
-        uint256 n = withdrawalDenominations.length;
-        if (n == 0) return true;
-        for (uint256 i = 0; i < n; i++) {
-            if (withdrawalDenominations[i] == amount) return true;
-        }
-        return false;
+    function isAllowedWithdrawal(uint256 amount) public view returns (bool) {
+        return amount >= withdrawalMin && amount <= withdrawalMax && amount % withdrawalStep == 0;
     }
 
     /* ---------------------------- Internals ---------------------------- */
@@ -561,16 +542,26 @@ contract ZyqorixGateway is ReentrancyGuard {
         require(ok && (data.length == 0 || abi.decode(data, (bool))), "TRANSFER_FROM_FAILED");
     }
 
+    /// @dev Require the funder to hold `amount`, pulling the funding wallets first when it holds less. Runs after
+    ///      the debit, which already pulls when reward credit exceeds the pool; this also covers a payout the
+    ///      funder is short of because the trading share has left for good. A failed pull never blocks a payout
+    ///      the funder can already cover. Reverts INSUFFICIENT_FUNDER.
+    function _requireFunderCovers(uint256 amount) internal {
+        if (funderBalance() < amount) {
+            try funder.pullFunding() {} catch {}
+        }
+        require(funderBalance() >= amount, "INSUFFICIENT_FUNDER");
+    }
+
     /// @dev Shared withdrawal path: run the checks and debit the wallet, take the gross amount from the funder,
-    ///      pay `user`, then swap and burn the fee. A failed swap never blocks the withdrawal: the fee goes
-    ///      back to the funder and `Withdrawn` reports burned = 0.
+    ///      pay `user`, then swap and burn the fee. A failed swap never blocks the withdrawal: the fee is
+    ///      booked into the reward pool (`_returnFee`) and `Withdrawn` reports burned = 0.
     function _withdraw(address user, uint256 amount) internal {
         require(accounts.isUser(user), "NOT_REGISTERED");
         require(amount > 0, "ZERO_AMOUNT");
         require(address(rewards) != address(0), "REWARDS_NOT_SET");
-        require(isAllowedDenomination(amount), "BAD_DENOMINATION");
+        require(isAllowedWithdrawal(amount), "BAD_WITHDRAWAL_AMOUNT");
         require(rewards.walletBalance(user) >= amount, "INSUFFICIENT_WALLET");
-        require(funderBalance() >= amount, "INSUFFICIENT_FUNDER");
 
         _checkCooldown(user);
 
@@ -578,19 +569,33 @@ contract ZyqorixGateway is ReentrancyGuard {
         uint256 net = amount - fee;
 
         rewards.debitWallet(user, amount);
+        _requireFunderCovers(amount);
         funder.pay(address(this), amount);
         _safeTransfer(token, user, net);
 
         uint256 burned;
         if (fee > 0) {
             if (liquidity != address(0)) {
-                try this.swapAndBurnFee(fee) returns (uint256 out) {
+                // Makes eth_estimateGas include the swap: a limit too low for it now reverts instead of
+                // quietly skipping the burn.
+                require(gasleft() >= FEE_SWAP_GAS, "LOW_GAS_FOR_BURN");
+                try this.swapAndBurnFee{gas: gasleft() - FEE_RETURN_GAS}(fee) returns (uint256 out) {
                     burned = out;
                 } catch {}
             }
-            if (burned == 0) _safeTransfer(token, address(funder), fee);
+            if (burned == 0) _returnFee(fee);
         }
         emit Withdrawn(user, address(funder), amount, net, fee, burned);
+    }
+
+    /// @dev Put a fee that wasn't swapped and burned into the reward pool, through `funder.fundRewards`. Should
+    ///      that fail, the fee still goes to the funder as plain USDT, so a withdrawal never reverts over its fee.
+    function _returnFee(uint256 fee) internal {
+        _safeApprove(token, address(funder), fee);
+        try funder.fundRewards(fee) {} catch {
+            _safeTransfer(token, address(funder), fee);
+        }
+        _safeApprove(token, address(funder), 0);
     }
 
     /// @dev Require the cooldown to have passed, then restart it.

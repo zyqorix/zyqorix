@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.36;
+pragma solidity 0.8.38;
 
 import {Test} from "forge-std/Test.sol";
 import {ZyqorixAccounts} from "../accounts.sol";
@@ -108,12 +108,18 @@ contract MockPositionManager {
 
 contract MockRewards {
     mapping(address => uint256) public walletBalance;
+    address public gateway;
+    function setGateway(address g) external { gateway = g; }
     function setBalance(address u, uint256 v) external { walletBalance[u] = v; }
     function creditDeposit(address, uint256) external {}
     function debitWallet(address u, uint256 v) external { walletBalance[u] -= v; }
 }
 
 contract ZyqorixLiquidityTest is Test {
+    /// @dev USDT's BSC mainnet address, hardcoded in funder, gateway, liquidity and the exchanger.
+    address constant USDT_ADDR = 0x55d398326f99059fF775485246999027B3197955;
+    /// @dev ZQR's mainnet address, hardcoded in liquidity.sol. The mock is etched there.
+    address constant ZQR = 0x43ADE7aE5E14e6dadD0f6967a0aDEADe56095e70;
 
     MockERC20 usdt;
     BurnableERC20 token;
@@ -127,19 +133,22 @@ contract ZyqorixLiquidityTest is Test {
     address stranger = makeAddr("stranger");
 
     function setUp() public {
-        usdt = new MockERC20();
-        token = new BurnableERC20();
+        // USDT's mainnet address is hardcoded in the contracts: etch the mock there.
+        vm.etch(USDT_ADDR, type(MockERC20).runtimeCode);
+        usdt = MockERC20(USDT_ADDR);
+        vm.etch(ZQR, type(BurnableERC20).runtimeCode);
+        token = BurnableERC20(ZQR);
         pool = new MockPool(address(usdt), address(token));
         router = new MockRouter();
         pm = new MockPositionManager();
-        lp = _deploy(address(token));
+        lp = _deploy();
         usdt.mint(funder, 1_000 ether);
         vm.prank(funder);
         usdt.approve(address(lp), type(uint256).max);
     }
 
-    function _deploy(address tok) internal returns (ZyqorixLiquidity l) {
-        l = new ZyqorixLiquidity(address(usdt), tok, address(pm), address(router));
+    function _deploy() internal returns (ZyqorixLiquidity l) {
+        l = new ZyqorixLiquidity(address(pm), address(router));
         l.initializePool(address(pool));
         l.initializeApproval();
     }
@@ -224,13 +233,13 @@ contract ZyqorixLiquidityTest is Test {
         vm.stopPrank();
 
         MockPool wrong = new MockPool(address(usdt), makeAddr("other"));
-        ZyqorixLiquidity bare = new ZyqorixLiquidity(address(usdt), address(token), address(pm), address(router));
+        ZyqorixLiquidity bare = new ZyqorixLiquidity(address(pm), address(router));
         vm.expectRevert("POOL_NOT_USDT_TOKEN");
         bare.initializePool(address(wrong));
     }
 
     function _lockReady() internal returns (ZyqorixLiquidity l) {
-        l = new ZyqorixLiquidity(address(usdt), address(token), address(pm), address(router));
+        l = new ZyqorixLiquidity(address(pm), address(router));
         l.initializePool(address(pool));
         l.initializeApproval();
         token.mint(address(this), 100 ether);
@@ -307,7 +316,7 @@ contract ZyqorixLiquidityTest is Test {
     }
 
     function test_failedInitializePoolLeavesItOpen() public {
-        ZyqorixLiquidity bare = new ZyqorixLiquidity(address(usdt), address(token), address(pm), address(router));
+        ZyqorixLiquidity bare = new ZyqorixLiquidity(address(pm), address(router));
         MockPool wrong = new MockPool(address(usdt), makeAddr("other"));
         vm.expectRevert("POOL_NOT_USDT_TOKEN");
         bare.initializePool(address(wrong));
@@ -316,7 +325,7 @@ contract ZyqorixLiquidityTest is Test {
     }
 
     function test_nonPoolAddressGivesAClearError() public {
-        ZyqorixLiquidity bare = new ZyqorixLiquidity(address(usdt), address(token), address(pm), address(router));
+        ZyqorixLiquidity bare = new ZyqorixLiquidity(address(pm), address(router));
         vm.expectRevert("NOT_A_POOL");
         bare.initializePool(stranger); // a wallet
         vm.expectRevert("NOT_A_POOL");
@@ -327,18 +336,33 @@ contract ZyqorixLiquidityTest is Test {
 
     function test_constructorRejectsZeroAddress() public {
         vm.expectRevert("ZERO_ADDRESS");
-        new ZyqorixLiquidity(address(0), address(token), address(pm), address(router));
+        new ZyqorixLiquidity(address(0), address(router));
+        vm.expectRevert("ZERO_ADDRESS");
+        new ZyqorixLiquidity(address(pm), address(0));
     }
 
     function test_constructorRejectsBadAddresses() public {
-        vm.expectRevert("SAME_TOKEN");
-        new ZyqorixLiquidity(address(usdt), address(usdt), address(pm), address(router));
         vm.expectRevert("NOT_CONTRACT");
-        new ZyqorixLiquidity(address(usdt), stranger, address(pm), address(router));
+        new ZyqorixLiquidity(stranger, address(router));
         vm.expectRevert("NOT_CONTRACT");
-        new ZyqorixLiquidity(address(usdt), address(token), stranger, address(router));
+        new ZyqorixLiquidity(address(pm), stranger);
+    }
+
+    function test_tokensAreTheMainnetAddresses() public view {
+        assertEq(lp.TOKEN(), ZQR);
+        assertEq(lp.USDT(), USDT_ADDR);
+    }
+
+    function test_constructorNeedsUsdtDeployed() public {
+        vm.etch(USDT_ADDR, "");
         vm.expectRevert("NOT_CONTRACT");
-        new ZyqorixLiquidity(address(usdt), address(token), address(pm), stranger);
+        new ZyqorixLiquidity(address(pm), address(router));
+    }
+
+    function test_constructorNeedsZqrDeployed() public {
+        vm.etch(ZQR, "");
+        vm.expectRevert("NOT_CONTRACT");
+        new ZyqorixLiquidity(address(pm), address(router));
     }
 
     /// @dev The launch price: tick 69082 is about 1,000 ZQR per USDT, on either side of the pool.
@@ -415,9 +439,10 @@ contract ZyqorixLiquidityTest is Test {
     /// @dev Real gateway, funder and liquidity: pay the user, swap the fee, burn what comes back.
     function test_withdrawalSwapsFeeAndBurnsThroughRealContracts() public {
         ZyqorixAccounts accounts = new ZyqorixAccounts();
-        ZyqorixFunder realFunder = new ZyqorixFunder(address(accounts), address(usdt));
-        ZyqorixGateway gateway = new ZyqorixGateway(address(accounts), address(usdt), address(realFunder));
+        ZyqorixFunder realFunder = new ZyqorixFunder(address(accounts));
+        ZyqorixGateway gateway = new ZyqorixGateway(address(accounts), address(realFunder));
         MockRewards rewards = new MockRewards();
+        rewards.setGateway(address(gateway));
         realFunder.setGateway(address(gateway));
         gateway.setRewards(address(rewards));
         ZyqorixLiquidity l = _lockReady();

@@ -14,14 +14,19 @@ const anvil = defineChain({
   caipNetworkId: "eip155:31337",
   chainNamespace: "eip155",
   name: "Anvil",
-  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+  // Labelled BNB: the testnet stands in for BSC, so fees read the same as on mainnet.
+  nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 },
   rpcUrls: { default: { http: [import.meta.env.DEV ? `${window.location.origin}/rpc` : "https://rpc-testnet.orbix.onl"] } },
   testnet: true,
 });
 
 // One network per build: with several, wagmi reads default to the first when the wallet hasn't synced.
+// Picked by where the app runs: localhost uses the NAS anvil testnet, every other host (zyqorix.net) BSC
+// mainnet. VITE_NETWORK=anvil|bsc overrides it, e.g. `npm run dev:mainnet` to try mainnet locally.
 const NETWORKS = { anvil, bsc };
-export const network = NETWORKS[import.meta.env.VITE_NETWORK] || (import.meta.env.DEV ? anvil : bsc);
+const host = window.location.hostname;
+const isLocal = host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host.endsWith(".localhost");
+export const network = anvil;// NETWORKS[import.meta.env.VITE_NETWORK] || (isLocal ? anvil : bsc);
 const networks = [network];
 
 export const ACTIVE_CHAIN_ID = network.id;

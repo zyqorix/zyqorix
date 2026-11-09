@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.36;
+pragma solidity 0.8.38;
 
 /*
  * ZYQORIX — Register Module
@@ -39,10 +39,12 @@ interface IZyqorixGateway {
 /*                               IZyqorixRewards                              */
 /* -------------------------------------------------------------------------- */
 /// @title IZyqorixRewards
-/// @notice Whether a sponsor is active.
+/// @notice Whether a sponsor may sponsor: active, or an agent.
 interface IZyqorixRewards {
     /// @notice True while `user` has capping left.
     function isActive(address user) external view returns (bool);
+    /// @notice True if `user` is an agent. Agents may sponsor without being active.
+    function isAgent(address user) external view returns (bool);
 }
 
 /* ========================================================================== */
@@ -90,13 +92,14 @@ contract ZyqorixRegister {
     ///         first. Membership is EOA-only, as in COC; admins can add other wallets via accounts.addUser.
     /// @param sponsor An existing registered member.
     /// @dev Reverts CALLER_NOT_EOA / SPONSOR_NOT_ACTIVE. The sponsor must have capping left, except the root,
-    ///      which starts the tree. `addUser` reverts SPONSOR_NOT_FOUND / ALREADY_REGISTERED / SELF_SPONSOR /
+    ///      which starts the tree, and agents, who may sponsor without being active. `addUser` reverts SPONSOR_NOT_FOUND / ALREADY_REGISTERED / SELF_SPONSOR /
     ///      PAUSED. The deposit reverts without allowance or balance, or if the gateway is paused.
     function register(address sponsor) external {
         require(msg.sender == tx.origin, "CALLER_NOT_EOA");
         accounts.addUser(msg.sender, sponsor);
+        IZyqorixRewards rewards = IZyqorixRewards(gateway.rewards());
         require(
-            sponsor == accounts.root() || IZyqorixRewards(gateway.rewards()).isActive(sponsor),
+            sponsor == accounts.root() || rewards.isActive(sponsor) || rewards.isAgent(sponsor),
             "SPONSOR_NOT_ACTIVE"
         );
         uint256 deposit = initialDeposit;

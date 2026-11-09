@@ -1,15 +1,27 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.36;
+pragma solidity 0.8.38;
 
 /*
  * ZYQORIX — Rewards Module
  * The member ledger and compensation plan. It keeps the wallet balance (deposits, referral rewards and
  * claimed daily rewards), agent balances, tiers and capping. It moves no tokens: the gateway and funder do.
  *
- * The daily reward is a fixed 1% of tier value, backed in advance: an activation is rejected unless the
- * funder's reward pool already holds its full 3x capping, which is then reserved for that member. The pool
- * can only receive money through funder.fundRewards after trading capital is repaid, so deposits can never
- * reach it and the contract never owes a daily reward it does not already hold.
+ * The daily reward is a fixed 1% of tier value, credited up to the member's capping. Daily and generation
+ * rewards are credited to the wallet balance at once and tracked as `rewardCredit`; that part leaves (by a
+ * withdrawal or an activation) only by drawing the funder's reward pool, which only trading profit fills: all USDT
+ * sent with funder.fundRewards or pulled by the funder from the client's funding wallets (which a short-pool spend
+ * triggers first). When the pool is short the withdrawal reverts, so member deposits never
+ * pay daily or generation rewards.
+ *
+ * Activation spends the whole wallet balance, deposits first (owner 2026-11-08). A part paid from reward credit
+ * draws only its trading and liquidity shares (60% + 20%) from the reward pool, first come first served, since
+ * those are the only shares that leave the funder as USDT. The referral, agent and leadership shares of that part
+ * are paid as reward credit (`rewardCredit`, `agentCredit`, `monthPoolCredit`), so they too leave only through
+ * the pool. Money that came from deposits is never gated by the pool.
+ *
+ * Vesting positions are priced from the liquidity 30-minute TWAP, never the spot price (a flash loan moves spot
+ * inside one transaction). Every good read is kept as `lastPrice`, which an activation uses when the TWAP can't
+ * be read, and no activation values ZQR below `floorPrice`, so a pushed-down pool can't hand out the allocation.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -22,6 +34,7 @@ interface IZyqorixAccounts {
     function checkIsAdmin(address account) external view returns (bool);
     function registeredAt(address account) external view returns (uint256);
     function getAffiliate(address user) external view returns (address referral, uint256 directCount);
+    function owner() external view returns (address);
 }
 
 /// @title IZyqorixGateway
@@ -36,10 +49,17 @@ interface IZyqorixGateway {
 
 /// @title IZyqorixFunder
 /// @notice The activation flows and the reward pool ledger.
+interface IERC20Balance {
+    function balanceOf(address account) external view returns (uint256);
+}
+
 interface IZyqorixFunder {
     function sendToTrading(uint256 amount) external;
     function sendToLiquidity(address liquidity, uint256 amount, uint24 slippageBps) external;
     function drawRewardPool(uint256 amount) external;
+    function rewardPool() external view returns (uint256);
+    function pullFunding() external returns (uint256 amount);
+    function pendingFunding() external view returns (uint256);
 }
 
 /// @title IZyqorixLiquidity
@@ -75,7 +95,7 @@ abstract contract ReentrancyGuard {
 /// @title ZyqorixRewards
 /// @author ZYQORIX
 /// @notice Activation, capping, referral, agent and daily rewards.
-/// @dev Must be an accounts admin (for `vesting.createPosition`), and set once on the gateway and funder.
+/// @dev Must be an accounts admin (for `vesting.createPosition`), and set on the gateway and funder.
 contract ZyqorixRewards is ReentrancyGuard {
     /* ------------------------------ Constants -------------------------- */
     /// @notice Basis-points denominator (10000 = 100%).
@@ -84,14 +104,19 @@ contract ZyqorixRewards is ReentrancyGuard {
     uint256 public constant DAILY_BPS = 100;
     /// @notice Capping added by an activation: 300% of the tier.
     uint256 public constant CAP_BPS = 30_000;
+    /// @notice Capping added by the last tier ($1,600), first activation and every re-activation: 200%.
+    uint256 public constant LAST_TIER_CAP_BPS = 20_000;
+    /// @notice False: nothing is forfeited at zero capping; uncollected daily and generation stay claimable.
+    bool public constant FORFEIT_AT_ZERO_CAPPING = false;
     /// @notice Number of tiers.
     uint256 public constant TIER_COUNT = 6;
     /// @notice Sponsor levels paid the generation bonus on a daily claim.
     uint256 public constant GENERATION_LEVELS = 10;
     /// @notice Generation bonus per level: 10% of the claimed daily reward.
     uint256 public constant GENERATION_BPS = 1_000;
-    /// @notice Active direct referrals needed for the higher referral rate.
-    uint256 public constant REFERRAL_ACTIVE_DIRECTS = 5;
+    /// @notice Active direct referrals needed for the higher referral rate. The direct being activated counts, so
+    ///         directs 1 to 5 pay 5% and the 6th and later pay 10%.
+    uint256 public constant REFERRAL_ACTIVE_DIRECTS = 6;
 
     /* ------------------------------- Wiring ---------------------------- */
     /// @notice The accounts contract. Immutable.
@@ -106,25 +131,49 @@ contract ZyqorixRewards is ReentrancyGuard {
 
     /* ---------------------------- Distribution ------------------------- */
     /// @notice Share of an activation sent to liquidity.
-    uint256 public liquidityBps = 5_000;
+    uint256 public liquidityBps = 2_000;
     /// @notice Share of an activation sent to the trading wallet.
-    uint256 public tradingBps = 1_000;
+    uint256 public tradingBps = 6_000;
     /// @notice Referral rate with fewer than REFERRAL_ACTIVE_DIRECTS active directs.
     uint256 public referralLowBps = 500;
     /// @notice Referral rate with REFERRAL_ACTIVE_DIRECTS or more active directs.
     uint256 public referralHighBps = 1_000;
-    /// @notice Share of an activation paid to the first active agent up the tree.
+    /// @notice Share of an activation paid to the first agent up the tree, active or not.
     uint256 public agentBps = 500;
     /// @notice Share of an activation recorded for the leadership pool.
     uint256 public leadershipBps = 500;
     /// @notice How many levels the agent walk checks.
     uint256 public agentWalkLimit = 50;
 
+    /* ------------------------------ Pricing ---------------------------- */
+    /// @notice The last good TWAP price, in USDT per ZQR (18-dp). Used when the TWAP can't be read. Starts at 0.001.
+    uint256 public lastPrice = 1e15;
+    /// @notice When `lastPrice` was last set by a TWAP read or an admin. Zero until then.
+    uint256 public lastPriceAt;
+    /// @notice The lowest price an activation may use, in USDT per ZQR (18-dp). A tier never buys more than
+    ///         price / floorPrice ZQR. Starts at 0.001.
+    uint256 public floorPrice = 1e15;
+
     /* ------------------------------ Balances --------------------------- */
     /// @notice Spendable and withdrawable balance: deposits, referral, claimed daily and leadership rewards.
     mapping(address => uint256) public walletBalance;
+    /// @notice The reward part of `walletBalance` (daily, generation, and referral or leadership earned from
+    ///         reward-credit activations), not yet drawn from the funder's reward pool. It is spent last, and
+    ///         spending it draws the pool (80% of it for an activation), so it can only leave once the pool is funded.
+    mapping(address => uint256) public rewardCredit;
+    /// @notice Sum of every member's `rewardCredit`: what the reward pool must hold to pay all of it out.
+    uint256 public totalRewardCredit;
+    /// @notice Sum of every member's `walletBalance`: what members can ask to withdraw.
+    uint256 public totalWalletBalance;
     /// @notice Agent rewards, withdrawn through the gateway with the cooldown and no fee.
     mapping(address => uint256) public agentBalance;
+    /// @notice Sum of every member's `agentBalance`.
+    uint256 public totalAgentBalance;
+    /// @notice The part of `agentBalance` earned from reward-credit activations. Withdrawn last, and only by
+    ///         drawing the reward pool.
+    mapping(address => uint256) public agentCredit;
+    /// @notice Sum of every member's `agentCredit`.
+    uint256 public totalAgentCredit;
     /// @notice Whether an admin has nominated this member as an agent.
     mapping(address => bool) public isAgent;
     /// @notice Lifetime earnings per member: daily, referral, generation, agent and leadership.
@@ -133,6 +182,8 @@ contract ZyqorixRewards is ReentrancyGuard {
     uint256 public totalRewardsDistributed;
     /// @notice USDT owed to the leadership program across all months. Held in the funder.
     uint256 public leadershipPool;
+    /// @notice The part of `leadershipPool` added by reward-credit activations. Claimed as reward credit.
+    uint256 public leadershipCredit;
 
     /* -------------------------- Leadership pool ------------------------ */
     /// @notice Members paid from each month's pool.
@@ -141,6 +192,10 @@ contract ZyqorixRewards is ReentrancyGuard {
     uint256 public constant LEADER_LIST = 50;
     /// @notice Leadership pool per calendar month (year * 12 + month - 1, UTC).
     mapping(uint256 => uint256) public monthPool;
+    /// @notice The part of each month's pool added by reward-credit activations.
+    mapping(uint256 => uint256) public monthPoolCredit;
+    /// @notice How much of each month's `monthPoolCredit` has been claimed. Claims round credit up and stop here.
+    mapping(uint256 => uint256) public monthCreditClaimed;
     /// @notice Direct referral activation volume per month, per sponsor.
     mapping(uint256 => mapping(address => uint256)) public monthVolume;
     /// @dev Each month's top sponsors, highest volume first.
@@ -172,10 +227,8 @@ contract ZyqorixRewards is ReentrancyGuard {
     /* --------------------------- Daily rewards ------------------------- */
     /// @notice Sum of every member's active tier value.
     uint256 public totalActiveValue;
-    /// @notice Sum of every member's capping. This is the money reserved in the reward pool.
+    /// @notice Sum of every member's capping: the most daily, referral and generation rewards can still pay.
     uint256 public totalCapping;
-    /// @notice Reward pool money not reserved for anyone. New activations reserve from this.
-    uint256 public unreservedPool;
     /// @notice Start of the first whole day not yet settled for a member.
     mapping(address => uint256) public lastAccrual;
     /// @notice Generation bonus earned and not yet claimed. Already deducted from capping.
@@ -186,6 +239,9 @@ contract ZyqorixRewards is ReentrancyGuard {
     mapping(address => uint256) public unclaimedDaily;
     /// @notice When a member last claimed.
     mapping(address => uint256) public lastClaim;
+    /// @notice When a member first activated a tier. Zero means never. The later tier pairs' day counters (60 and
+    ///         120 days) run from it, and the UI counts income days from it.
+    mapping(address => uint256) public firstActivation;
 
     /* ------------------------------- Events ---------------------------- */
     /// @notice Emitted when `user` activates a tier.
@@ -234,9 +290,14 @@ contract ZyqorixRewards is ReentrancyGuard {
     /// @param user The member.
     /// @param amount The amount moved to their wallet balance.
     event LeadershipClaimed(address indexed user, uint256 amount);
-    /// @notice Emitted when money enters the unreserved pool.
+    /// @notice Emitted when the funder adds trading profit to its reward pool.
     /// @param amount The amount.
     event ProfitReceived(uint256 amount);
+    /// @notice Emitted when a wallet or agent spend draws the reward pool: the whole reward-credit part of a
+    ///         withdrawal, or its trading and liquidity shares for an activation.
+    /// @param user The member.
+    /// @param amount The amount drawn from the pool.
+    event RewardCreditDrawn(address indexed user, uint256 amount);
     /// @notice Emitted when an admin nominates or removes an agent.
     /// @param user The member.
     /// @param active True if nominated.
@@ -250,6 +311,21 @@ contract ZyqorixRewards is ReentrancyGuard {
     /// @notice Emitted when the agent walk limit changes.
     /// @param limit The new limit.
     event AgentWalkLimitSet(uint256 limit);
+    /// @notice Emitted when `lastPrice` changes, from a TWAP read or an admin.
+    /// @param price The new price in USDT per ZQR.
+    event LastPriceUpdated(uint256 price);
+    /// @notice Emitted when an activation can't read the TWAP and uses `lastPrice` instead.
+    /// @param user The member.
+    /// @param price The price used.
+    event PriceFallbackUsed(address indexed user, uint256 price);
+    /// @notice Emitted when the price an activation would use is below `floorPrice`, so the floor is used.
+    /// @param user The member.
+    /// @param price The price the TWAP or `lastPrice` gave.
+    /// @param floor The floor used instead.
+    event PriceFloored(address indexed user, uint256 price, uint256 floor);
+    /// @notice Emitted when the floor price changes.
+    /// @param price The new floor in USDT per ZQR.
+    event FloorPriceSet(uint256 price);
 
     /* ------------------------------ Modifiers -------------------------- */
     /// @dev Restricts a function to the accounts owner or an explicit admin. Reverts NOT_AUTH.
@@ -282,14 +358,19 @@ contract ZyqorixRewards is ReentrancyGuard {
     }
 
     /* ============================= ACTIVATE ============================ */
-    /// @notice Activate the next tier from your wallet balance. Tiers run in order from $50, none can be
+    /// @notice Activate the next tier from your whole wallet balance, deposits first. A part paid from daily or
+    ///         generation rewards needs the reward pool to hold its trading and liquidity shares (80% of that part),
+    ///         first come first served; its referral, agent and leadership shares are paid as reward credit.
+    ///         Tiers run in order from $50, none can be
     ///         skipped, and each opens once, except the last, which reopens whenever its capping is zero. You
-    ///         receive 3x capping and, while vesting holds enough unreserved ZQR, the tier's worth of ZQR in
-    ///         vesting. The price is distributed.
+    ///         receive 3x capping (2x for the $1,600 tier, every time) and, while vesting holds enough
+    ///         unreserved ZQR, the tier's worth of ZQR in vesting at the TWAP price (or `lastPrice` when the TWAP
+    ///         can't be read), valued no lower than `floorPrice`. The price is distributed.
     /// @param tier 0..5 for $50, $100, $200, $400, $800, $1600.
     /// @dev Reverts PAUSED / NOT_REGISTERED / BAD_TIER / TIER_USED / TIER_SKIPPED / TIER_ACTIVE / TIER_LOCKED /
-    ///      INSUFFICIENT_WALLET / INSUFFICIENT_REWARD_POOL / NO_LIQUIDITY / NO_PRICE. The ZQR price must be
-    ///      readable: the liquidity contract reverts when its pool or TWAP isn't ready. With TOKENID 0 the funder
+    ///      INSUFFICIENT_WALLET / NO_LIQUIDITY, and INSUFFICIENT_REWARD_POOL (from the funder) when the price
+    ///      reaches into reward credit the pool can't cover. The price never reverts it: when the
+    ///      liquidity TWAP isn't ready, `lastPrice` is used ({PriceFallbackUsed}). With TOKENID 0 the funder
     ///      keeps the liquidity share. When vesting is short the activation still goes through with no
     ///      position, zqr 0 in {Activated}, and {VestingSkipped}. There are no partial positions.
     function activate(uint256 tier) external nonReentrant {
@@ -309,17 +390,15 @@ contract ZyqorixRewards is ReentrancyGuard {
         require(isTierUnlocked(user, tier), "TIER_LOCKED");
         uint256 price = tierPrice(tier);
         require(walletBalance[user] >= price, "INSUFFICIENT_WALLET");
-        uint256 reserve = (price * CAP_BPS) / BPS;
-        require(reserve <= unreservedPool, "INSUFFICIENT_REWARD_POOL");
+        uint256 cap = (price * capBps(tier)) / BPS; // the capping this tier adds
         address lp = gateway.liquidity();
         require(lp != address(0), "NO_LIQUIDITY");
-        uint256 zqr = IZyqorixLiquidity(lp).convertToken(gateway.token(), price);
-        require(zqr != 0, "NO_PRICE");
+        uint256 zqr = _zqrFor(user, lp, price);
 
-        walletBalance[user] -= price;
-        unreservedPool -= reserve;
+        uint256 fromCredit = _debitWallet(user, price);
+        _drawPool(user, _ceilBps(fromCredit, tradingBps)); // the credit part's trading share, up front
         nextTier[user] = tier + 1;
-        _addTier(user, tier, price);
+        _addTier(user, tier, price, cap);
 
         if (zqr <= vesting.available()) {
             vesting.createPosition(user, zqr);
@@ -328,20 +407,30 @@ contract ZyqorixRewards is ReentrancyGuard {
             zqr = 0;
         }
 
-        _addLeadership((price * leadershipBps) / BPS);
-        _payReferral(user, price);
-        _payAgent(user, price);
+        uint256 leadership = (price * leadershipBps) / BPS;
+        _addLeadership(leadership, _creditShare(leadership, fromCredit, price));
+        _payReferral(user, price, fromCredit);
+        _payAgent(user, price, fromCredit);
 
         IZyqorixFunder funder = IZyqorixFunder(gateway.funder());
         funder.sendToTrading((price * tradingBps) / BPS);
+        IERC20Balance usdt = IERC20Balance(gateway.token());
+        uint256 before = usdt.balanceOf(address(funder));
         funder.sendToLiquidity(lp, (price * liquidityBps) / BPS, gateway.liquiditySlippageBps());
+        // The credit part's liquidity share is drawn only when it actually left; a failed send keeps it in the
+        // funder, and so in the pool (audit 2026-11-08 M-1).
+        if (fromCredit > 0 && usdt.balanceOf(address(funder)) < before) {
+            _drawPool(user, _ceilBps(fromCredit, liquidityBps));
+        }
         emit Activated(user, tier, price, zqr);
     }
 
     /* ============================== DAILY ============================== */
-    /// @notice Claim your fixed daily rewards into your wallet balance. Once per reward day.
+    /// @notice Claim your fixed daily rewards into your wallet balance. Once per reward day. Rewards already
+    ///         earned stay claimable after your capping reaches zero. The amount is reward credit: it leaves your
+    ///         wallet only by drawing the funded reward pool.
     /// @return amount The amount claimed.
-    /// @dev Reverts CLAIM_COOLDOWN / NOTHING_TO_CLAIM.
+    /// @dev Reverts CLAIM_COOLDOWN / NOTHING_TO_CLAIM. Never reverts on the reward pool.
     function claimDaily() external nonReentrant returns (uint256 amount) {
         address user = msg.sender;
         require(block.timestamp >= lastClaim[user] + DAY, "CLAIM_COOLDOWN");
@@ -350,23 +439,22 @@ contract ZyqorixRewards is ReentrancyGuard {
         require(amount > 0, "NOTHING_TO_CLAIM");
         unclaimedDaily[user] = 0;
         lastClaim[user] = block.timestamp;
-        walletBalance[user] += amount;
-        IZyqorixFunder(gateway.funder()).drawRewardPool(amount);
+        _creditReward(user, amount);
         emit DailyClaimed(user, amount);
         _payGeneration(user, amount);
     }
 
-    /// @notice Claim your generation bonus into your wallet balance. It already used your capping when earned.
+    /// @notice Claim your generation bonus into your wallet balance. It already used your capping when earned and
+    ///         stays claimable after your capping reaches zero. Like daily, it is reward credit.
     /// @return amount The amount claimed.
-    /// @dev Reverts NOTHING_TO_CLAIM.
+    /// @dev Reverts NOTHING_TO_CLAIM. Never reverts on the reward pool.
     function claimGeneration() external nonReentrant returns (uint256 amount) {
         address user = msg.sender;
         amount = generationBalance[user];
         require(amount > 0, "NOTHING_TO_CLAIM");
         generationBalance[user] = 0;
         totalGeneration -= amount;
-        walletBalance[user] += amount;
-        IZyqorixFunder(gateway.funder()).drawRewardPool(amount);
+        _creditReward(user, amount);
         emit GenerationClaimed(user, amount);
     }
 
@@ -380,43 +468,69 @@ contract ZyqorixRewards is ReentrancyGuard {
         uint256 current = _monthKey(block.timestamp);
         uint256[] storage months = _leaderMonths[user];
         uint256 i = _leaderClaimed[user];
+        uint256 asCredit;
         while (i < months.length && months[i] < current) {
-            total += _leaderShare(months[i], user);
+            uint256 month = months[i];
+            uint256 share = _leaderShare(month, user);
+            total += share;
+            if (share > 0) {
+                uint256 poolCredit = monthPoolCredit[month];
+                uint256 part = (share * poolCredit + monthPool[month] - 1) / monthPool[month]; // rounded up (L-1)
+                uint256 left = poolCredit - monthCreditClaimed[month];
+                if (part > left) part = left;
+                monthCreditClaimed[month] += part;
+                asCredit += part;
+            }
             i++;
         }
         _leaderClaimed[user] = i;
         require(total > 0, "NOTHING_TO_CLAIM");
 
         leadershipPool -= total;
-        walletBalance[user] += total;
+        leadershipCredit -= asCredit;
+        _creditMixed(user, total, asCredit);
         _recordIncome(user, total);
         emit LeadershipClaimed(user, total);
     }
 
     /* ============================ TRADING ============================== */
-    /// @notice Add money to the unreserved pool. Called by the funder.
+    /// @notice Record that the funder added `amount` to its reward pool. Called by the funder's `fundRewards`
+    ///         and `pullFunding`; the pool ledger itself lives in the funder.
     /// @param amount The amount.
-    /// @dev Reverts NOT_FUNDER.
+    /// @dev Reverts NOT_FUNDER. Deliberately not `nonReentrant`: the auto-pull in `_spendWallet` reaches it while
+    ///      `activate` holds this contract's guard, and a guard here would make every auto-pull fail silently.
     function notifyProfit(uint256 amount) external {
         require(msg.sender == gateway.funder(), "NOT_FUNDER");
-        unreservedPool += amount;
         emit ProfitReceived(amount);
     }
 
     /* ============================== GATEWAY ============================ */
     /// @notice Record a deposit in `user`'s wallet balance.
     function creditDeposit(address user, uint256 amount) external onlyGateway {
-        walletBalance[user] += amount;
+        _creditWallet(user, amount);
     }
 
-    /// @notice Debit a withdrawal from `user`'s wallet balance.
+    /// @notice Debit a withdrawal from `user`'s wallet balance. Any reward-credit part is drawn from the reward
+    ///         pool, so the withdrawal reverts INSUFFICIENT_REWARD_POOL (before any USDT moves) when it is short.
     function debitWallet(address user, uint256 amount) external onlyGateway {
-        walletBalance[user] -= amount;
+        _spendWallet(user, amount);
     }
 
-    /// @notice Debit an agent withdrawal from `user`'s agent balance.
+    /// @notice Debit an agent withdrawal from `user`'s agent balance, the part outside `agentCredit` first. The
+    ///         credit part is drawn from the reward pool, so the withdrawal reverts INSUFFICIENT_REWARD_POOL when
+    ///         the pool is short.
     function debitAgent(address user, uint256 amount) external onlyGateway {
-        agentBalance[user] -= amount;
+        uint256 balance = agentBalance[user];
+        uint256 credit = agentCredit[user];
+        agentBalance[user] = balance - amount;
+        totalAgentBalance -= amount;
+        uint256 free = balance - credit;
+        if (amount > free) {
+            uint256 fromCredit = amount - free;
+            agentCredit[user] = credit - fromCredit;
+            totalAgentCredit -= fromCredit;
+            _drawPool(user, fromCredit);
+        }
     }
 
     /* ============================== ADMIN ============================== */
@@ -439,8 +553,8 @@ contract ZyqorixRewards is ReentrancyGuard {
         emit ActiveDirectsSynced(sponsor, count);
     }
 
-    /// @notice Set the activation distribution. Whatever is left of the highest total stays in the funder as
-    ///         the withdrawal buffer.
+    /// @notice Set the activation distribution. Whatever the shares leave (for example the lower referral rate's
+    ///         difference) stays in the funder.
     /// @dev onlyAuth. Reverts BAD_DISTRIBUTION.
     function setDistribution(
         uint256 liquidity_, uint256 trading_, uint256 referralLow_, uint256 referralHigh_, uint256 agent_, uint256 leadership_
@@ -474,12 +588,38 @@ contract ZyqorixRewards is ReentrancyGuard {
         emit VestingSet(vestingAddr);
     }
 
+    /// @notice Set the price used when the TWAP can't be read, e.g. before the pool's oracle is ready.
+    /// @param price USDT per ZQR (18-dp), above zero.
+    /// @dev onlyAuth. Reverts BAD_PRICE.
+    function setLastPrice(uint256 price) external onlyAuth {
+        require(price > 0, "BAD_PRICE");
+        lastPrice = price;
+        lastPriceAt = block.timestamp;
+        emit LastPriceUpdated(price);
+    }
+
+    /// @notice Set the lowest price an activation may use. Lower it if the real market falls below it.
+    /// @param price USDT per ZQR (18-dp), above zero.
+    /// @dev onlyAuth. Reverts BAD_PRICE.
+    function setFloorPrice(uint256 price) external onlyAuth {
+        require(price > 0, "BAD_PRICE");
+        floorPrice = price;
+        emit FloorPriceSet(price);
+    }
+
     /* ============================== VIEWS ============================== */
     /// @notice The USDT price of tier `tier`: 50, 100, 200, 400, 800, 1600.
     /// @param tier The tier index.
     /// @return The price (18-dp).
     function tierPrice(uint256 tier) public pure returns (uint256) {
         return (50 ether) << tier;
+    }
+
+    /// @notice Capping a tier adds, in basis points of its price: 3x, or 2x for the last tier ($1,600).
+    /// @param tier The tier index.
+    /// @return The capping rate in basis points.
+    function capBps(uint256 tier) public pure returns (uint256) {
+        return tier == TIER_COUNT - 1 ? LAST_TIER_CAP_BPS : CAP_BPS;
     }
 
     /// @notice Capping left on one of `user`'s tiers.
@@ -505,16 +645,65 @@ contract ZyqorixRewards is ReentrancyGuard {
     }
 
     /// @notice Whether `user` can activate `tier`: the first pair is open from registration; later pairs open
-    ///         on the day counter or when the previous pair has both capped, whichever comes first.
+    ///         60 days per pair after the member's FIRST activation, or when the previous pair has both capped,
+    ///         whichever comes first. Before any activation only the first pair is open (owner 2026-11-08:
+    ///         the days count from the first activation, not from registration).
     /// @param user The member.
     /// @param tier The tier index.
     /// @return True if unlocked.
     function isTierUnlocked(address user, uint256 tier) public view returns (bool) {
         uint256 pair = tier / 2;
         if (pair == 0) return true;
-        if (block.timestamp >= accounts.registeredAt(user) + pair * 60 * DAY) return true;
+        uint256 start = firstActivation[user];
+        if (start != 0 && block.timestamp >= start + pair * 60 * DAY) return true;
         uint256 previous = 3 << ((pair - 1) * 2);
         return cappedTiers[user] & previous == previous;
+    }
+
+    /// @notice What activating `tier` would draw from the reward pool right now: its trading and liquidity
+    ///         shares of the part the deposits in `user`'s wallet don't cover. Zero when they cover the price.
+    /// @param user The member.
+    /// @param tier The tier index.
+    /// @return The pool amount needed (18-dp).
+    /// @dev Reverts BAD_TIER.
+    function activationPoolNeed(address user, uint256 tier) external view returns (uint256) {
+        require(tier < TIER_COUNT, "BAD_TIER");
+        uint256 price = tierPrice(tier);
+        uint256 free = walletBalance[user] - rewardCredit[user];
+        if (price <= free) return 0;
+        return _ceilBps(price - free, tradingBps) + _ceilBps(price - free, liquidityBps);
+    }
+
+    /// @notice What `user` can withdraw right now: the wallet balance outside reward credit, plus the reward
+    ///         credit the reward pool can cover, counting the funding wallets' USDT the funder would pull first.
+    /// @param user The member.
+    /// @return The amount (before the withdrawal fee and the allowed-amount steps).
+    function withdrawable(address user) external view returns (uint256) {
+        uint256 credit = rewardCredit[user];
+        IZyqorixFunder funder = IZyqorixFunder(gateway.funder());
+        uint256 pool = funder.rewardPool();
+        if (credit > pool) {
+            try funder.pendingFunding() returns (uint256 waiting) {
+                pool += waiting;
+            } catch {}
+        }
+        return walletBalance[user] - credit + (credit < pool ? credit : pool);
+    }
+
+    /// @notice What `user` can withdraw from their agent balance right now: the part outside `agentCredit`, plus
+    ///         the agent credit the reward pool (with the funding wallets' waiting USDT) can cover.
+    /// @param user The member.
+    /// @return The amount.
+    function agentWithdrawable(address user) external view returns (uint256) {
+        uint256 credit = agentCredit[user];
+        IZyqorixFunder funder = IZyqorixFunder(gateway.funder());
+        uint256 pool = funder.rewardPool();
+        if (credit > pool) {
+            try funder.pendingFunding() returns (uint256 waiting) {
+                pool += waiting;
+            } catch {}
+        }
+        return agentBalance[user] - credit + (credit < pool ? credit : pool);
     }
 
     /// @notice One-call dashboard snapshot for a member.
@@ -578,7 +767,7 @@ contract ZyqorixRewards is ReentrancyGuard {
         }
     }
 
-    /// @notice Daily rewards `user` can claim now.
+    /// @notice Daily rewards `user` can claim now, including days settled before their capping reached zero.
     /// @param user The member.
     /// @return amount The claimable amount.
     function pendingDaily(address user) public view returns (uint256 amount) {
@@ -618,8 +807,8 @@ contract ZyqorixRewards is ReentrancyGuard {
         if (total > limit) total = limit;
     }
 
-    /// @dev Settle `user`'s whole days against their capping. The reserved money stays in the funder's reward
-    ///      pool until they claim.
+    /// @dev Settle `user`'s whole days against their capping. Paid out of the reward pool only when the member
+    ///      spends or withdraws it.
     function _sync(address user) internal {
         uint256 earned = _accrued(user);
         lastAccrual[user] += ((block.timestamp - lastAccrual[user]) / DAY) * DAY;
@@ -661,9 +850,9 @@ contract ZyqorixRewards is ReentrancyGuard {
     }
 
     /// @dev Open a tier: add its capping and tier value, and count the member as active for their sponsor.
-    function _addTier(address user, uint256 tier, uint256 price) internal {
+    function _addTier(address user, uint256 tier, uint256 price, uint256 cap) internal {
         bool wasInactive = capping[user] == 0;
-        uint256 cap = (price * CAP_BPS) / BPS;
+        if (firstActivation[user] == 0) firstActivation[user] = block.timestamp;
         _tierCapping[user][tier] = cap;
         _activeTiers[user].push(uint8(tier));
         capping[user] += cap;
@@ -674,12 +863,43 @@ contract ZyqorixRewards is ReentrancyGuard {
         if (wasInactive) _changeActiveDirects(user, true);
     }
 
-    /// @dev Add to this month's pool.
-    function _addLeadership(uint256 amount) internal {
+    /// @dev The ZQR `price` USDT buys: the liquidity TWAP, which also becomes `lastPrice`, or `lastPrice` when the
+    ///      TWAP can't be read. Never priced below `floorPrice`.
+    function _zqrFor(address user, address lp, uint256 price) internal returns (uint256 zqr) {
+        uint256 used;
+        try IZyqorixLiquidity(lp).convertToken(gateway.token(), price) returns (uint256 out) {
+            if (out > 0) {
+                used = (price * 1e18) / out;
+                if (used > 0) {
+                    lastPrice = used;
+                    lastPriceAt = block.timestamp;
+                    emit LastPriceUpdated(used);
+                    zqr = out;
+                }
+            }
+        } catch {}
+        if (used == 0) {
+            used = lastPrice;
+            emit PriceFallbackUsed(user, used);
+        }
+        if (used < floorPrice) {
+            emit PriceFloored(user, used, floorPrice);
+            used = floorPrice;
+            zqr = 0;
+        }
+        if (zqr == 0) zqr = (price * 1e18) / used;
+    }
+
+    /// @dev Add to this month's pool. `asCredit` is the part paid from reward credit.
+    function _addLeadership(uint256 amount, uint256 asCredit) internal {
         uint256 month = _monthKey(block.timestamp);
         _rollPool(month);
         monthPool[month] += amount;
         leadershipPool += amount;
+        if (asCredit > 0) {
+            monthPoolCredit[month] += asCredit;
+            leadershipCredit += asCredit;
+        }
     }
 
     /// @dev Move the last month's pool forward if nobody qualified for it.
@@ -689,6 +909,8 @@ contract ZyqorixRewards is ReentrancyGuard {
         if (_leaders[last].length == 0) {
             monthPool[month] += monthPool[last];
             monthPool[last] = 0;
+            monthPoolCredit[month] += monthPoolCredit[last];
+            monthPoolCredit[last] = 0;
         }
         _poolMonth = month;
     }
@@ -703,26 +925,26 @@ contract ZyqorixRewards is ReentrancyGuard {
 
         address[] storage top = _leaders[month];
         uint256 n = top.length;
-        uint256 at = n;
+        uint256 pos = n;
         for (uint256 i = 0; i < n; i++) {
             if (top[i] == sponsor) {
-                at = i;
+                pos = i;
                 break;
             }
         }
-        if (at == n) {
+        if (pos == n) {
             if (n < LEADER_LIST) {
                 top.push(sponsor);
             } else {
-                at = n - 1;
-                if (volume <= monthVolume[month][top[at]]) return; // a tie keeps whoever got there first
-                top[at] = sponsor;
+                pos = n - 1;
+                if (volume <= monthVolume[month][top[pos]]) return; // a tie keeps whoever got there first
+                top[pos] = sponsor;
             }
         }
-        while (at > 0 && monthVolume[month][top[at - 1]] < volume) {
-            top[at] = top[at - 1];
-            top[at - 1] = sponsor;
-            at--;
+        while (pos > 0 && monthVolume[month][top[pos - 1]] < volume) {
+            top[pos] = top[pos - 1];
+            top[pos - 1] = sponsor;
+            pos--;
         }
     }
 
@@ -760,6 +982,74 @@ contract ZyqorixRewards is ReentrancyGuard {
         totalRewardsDistributed += amount;
     }
 
+    /// @dev Add pool-backed money (deposit, referral, leadership) to `user`'s wallet balance.
+    function _creditWallet(address user, uint256 amount) internal {
+        walletBalance[user] += amount;
+        totalWalletBalance += amount;
+    }
+
+    /// @dev Add daily or generation rewards to `user`'s wallet balance as reward credit.
+    function _creditReward(address user, uint256 amount) internal {
+        _creditMixed(user, amount, amount);
+    }
+
+    /// @dev Add `amount` to `user`'s wallet balance, `asCredit` of it as reward credit.
+    function _creditMixed(address user, uint256 amount, uint256 asCredit) internal {
+        _creditWallet(user, amount);
+        if (asCredit > 0) {
+            rewardCredit[user] += asCredit;
+            totalRewardCredit += asCredit;
+        }
+    }
+
+    /// @dev Spend `amount` of `user`'s wallet balance, the part outside reward credit first. The reward-credit part
+    ///      is drawn from the funder's reward pool, which reverts INSUFFICIENT_REWARD_POOL when the pool is short.
+    ///      When the pool is short, the funder pulls its funding wallets in first (`pullFunding`); a failed
+    ///      pull is ignored, so it can only help a spend, never block one.
+    function _spendWallet(address user, uint256 amount) internal {
+        _drawPool(user, _debitWallet(user, amount));
+    }
+
+    /// @dev Take `amount` off `user`'s wallet balance, the part outside reward credit first.
+    /// @return fromCredit The part taken from reward credit.
+    function _debitWallet(address user, uint256 amount) internal returns (uint256 fromCredit) {
+        uint256 balance = walletBalance[user];
+        uint256 credit = rewardCredit[user];
+        uint256 free = balance - credit;
+        walletBalance[user] = balance - amount;
+        totalWalletBalance -= amount;
+        if (amount > free) {
+            fromCredit = amount - free;
+            rewardCredit[user] = credit - fromCredit;
+            totalRewardCredit -= fromCredit;
+        }
+    }
+
+    /// @dev `bps` of `amount`, rounded up: a pool draw never backs less than the USDT that leaves.
+    function _ceilBps(uint256 amount, uint256 bps) internal pure returns (uint256) {
+        return (amount * bps + BPS - 1) / BPS;
+    }
+
+    /// @dev The reward-credit part of a payout `amount` from an activation of `price` with `fromCredit` paid from
+    ///      credit: pro rata, rounded up and at most `amount`, so rounding never turns credit into cash (L-1).
+    function _creditShare(uint256 amount, uint256 fromCredit, uint256 price) internal pure returns (uint256 part) {
+        if (fromCredit == 0) return 0;
+        part = (amount * fromCredit + price - 1) / price;
+        if (part > amount) part = amount;
+    }
+
+    /// @dev Draw `amount` from the funder's reward pool for `user`, pulling the funding wallets first when the pool
+    ///      is short (a failed pull is ignored). Reverts INSUFFICIENT_REWARD_POOL from the funder.
+    function _drawPool(address user, uint256 amount) internal {
+        if (amount == 0) return;
+        IZyqorixFunder funder = IZyqorixFunder(gateway.funder());
+        if (amount > funder.rewardPool()) {
+            try funder.pullFunding() {} catch {}
+        }
+        funder.drawRewardPool(amount);
+        emit RewardCreditDrawn(user, amount);
+    }
+
     /// @dev Keep the sponsor's active direct count in step with `user` going active or inactive.
     function _changeActiveDirects(address user, bool up) internal {
         (address sponsor, ) = accounts.getAffiliate(user);
@@ -770,7 +1060,8 @@ contract ZyqorixRewards is ReentrancyGuard {
 
     /// @dev Count the activation towards the sponsor's monthly volume and pay them 5% or 10% into their wallet,
     ///      limited by their capping. An inactive sponsor gets neither. Whatever isn't paid stays in the funder.
-    function _payReferral(address user, uint256 price) internal {
+    ///      The share of it paid for by reward credit (`fromCredit` of `price`) is paid as reward credit.
+    function _payReferral(address user, uint256 price, uint256 fromCredit) internal {
         (address sponsor, ) = accounts.getAffiliate(user);
         if (sponsor == address(0)) return;
         _sync(sponsor);
@@ -778,15 +1069,14 @@ contract ZyqorixRewards is ReentrancyGuard {
         _addVolume(sponsor, price);
         uint256 rate = activeDirects[sponsor] >= REFERRAL_ACTIVE_DIRECTS ? referralHighBps : referralLowBps;
         uint256 paid = _useCapping(sponsor, (price * rate) / BPS);
-        walletBalance[sponsor] += paid;
-        unreservedPool += paid; // capping used by referral income frees that reserve for new activations
+        _creditMixed(sponsor, paid, _creditShare(paid, fromCredit, price));
         _recordIncome(sponsor, paid);
         emit ReferralPaid(sponsor, user, paid);
     }
 
     /// @dev Walk up 10 sponsor levels from `user` and pay each one 10% of the claimed daily reward, limited by
     ///      their capping. A sponsor with zero capping is skipped, but still counts as a level. The bonus comes
-    ///      out of the sponsor's own capping, so it is already covered by their reserve.
+    ///      out of the sponsor's own capping and is reward credit once claimed.
     function _payGeneration(address user, uint256 amount) internal {
         uint256 bonus = (amount * GENERATION_BPS) / BPS;
         if (bonus == 0) return;
@@ -804,14 +1094,21 @@ contract ZyqorixRewards is ReentrancyGuard {
         }
     }
 
-    /// @dev Walk up the tree from `user`, including `user`, and pay the first active agent. It uses no capping.
-    ///      Inactive agents are skipped. If none is found within the limit, the share stays in the funder.
-    function _payAgent(address user, uint256 price) internal {
+    /// @dev Walk up the tree from `user`, including `user`, and pay the first agent, active or not. It uses no capping.
+    ///      If none is found within the limit, the share stays in the funder.
+    ///      The share of it paid for by reward credit (`fromCredit` of `price`) is booked as `agentCredit`.
+    function _payAgent(address user, uint256 price, uint256 fromCredit) internal {
         address cursor = user;
         for (uint256 i = 0; i < agentWalkLimit && cursor != address(0); i++) {
-            if (isAgent[cursor] && capping[cursor] > 0) {
+            if (isAgent[cursor]) {
                 uint256 amount = (price * agentBps) / BPS;
                 agentBalance[cursor] += amount;
+                totalAgentBalance += amount;
+                uint256 asCredit = _creditShare(amount, fromCredit, price);
+                if (asCredit > 0) {
+                    agentCredit[cursor] += asCredit;
+                    totalAgentCredit += asCredit;
+                }
                 _recordIncome(cursor, amount);
                 emit AgentPaid(cursor, user, amount);
                 return;

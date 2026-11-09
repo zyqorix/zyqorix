@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.36;
+pragma solidity 0.8.38;
 
 import {Test} from "forge-std/Test.sol";
 import {ZyqorixAccounts} from "../accounts.sol";
-import {ZyqorixToken} from "../zqrtoken.sol";
+import {ZQRMock} from "../zqrmock.sol";
 import {ZyqorixVesting} from "../vesting.sol";
 
 contract ZyqorixVestingTest is Test {
+    address constant ZQR_ADDR = 0x43ADE7aE5E14e6dadD0f6967a0aDEADe56095e70;
     uint256 constant START = 1799971200;
     uint256 constant MONTH = 30 days;
 
     ZyqorixAccounts accounts;
-    ZyqorixToken zqr;
+    ZQRMock zqr;
     ZyqorixVesting vesting;
 
     address owner = address(this);
@@ -23,8 +24,11 @@ contract ZyqorixVestingTest is Test {
         vm.warp(START);
         accounts = new ZyqorixAccounts();
         accounts.addAdmin(hub);
-        zqr = new ZyqorixToken();
-        vesting = new ZyqorixVesting(address(accounts), address(zqr), 30 days);
+        // ZQR's mainnet address is hardcoded in vesting.sol: etch the mock there and mint the full supply.
+        vm.etch(ZQR_ADDR, type(ZQRMock).runtimeCode);
+        zqr = ZQRMock(ZQR_ADDR);
+        zqr.mint(address(this), zqr.MAX_SUPPLY());
+        vesting = new ZyqorixVesting(address(accounts), 30 days);
         zqr.transfer(address(vesting), 1_000 ether); // operator funds with a plain transfer
     }
 
@@ -36,6 +40,16 @@ contract ZyqorixVestingTest is Test {
     function _claim() internal returns (uint256) {
         vm.prank(alice);
         return vesting.claim();
+    }
+
+    function test_tokenIsTheMainnetZqr() public view {
+        assertEq(vesting.token(), ZQR_ADDR);
+    }
+
+    function test_constructorNeedsZqrDeployed() public {
+        vm.etch(ZQR_ADDR, "");
+        vm.expectRevert("NOT_CONTRACT");
+        new ZyqorixVesting(address(accounts), 30 days);
     }
 
     function test_operatorFundingShowsAsAvailable() public view {
@@ -241,13 +255,16 @@ contract ZyqorixVestingTest is Test {
         vm.warp(START + MONTH);
         _claim(); // 15 paid, 885 still reserved, 985 held
 
-        ZyqorixVesting next = new ZyqorixVesting(address(accounts), address(zqr), 30 days);
+        ZyqorixVesting next = new ZyqorixVesting(address(accounts), 30 days);
         vesting.emergencyWithdraw(address(next));
 
         assertEq(zqr.balanceOf(address(next)), 985 ether);
         assertEq(zqr.balanceOf(address(vesting)), 0);
         assertEq(vesting.migratedTo(), address(next));
         assertEq(vesting.available(), 0);
+        // A matured month is due, but claim reverts here, so the view shows nothing to claim.
+        vm.warp(START + 2 * MONTH);
+        assertEq(vesting.claimable(alice), 0);
 
         vm.prank(alice);
         vm.expectRevert("MIGRATED");
@@ -263,7 +280,7 @@ contract ZyqorixVestingTest is Test {
     }
 
     function test_emergencyWithdrawCatchesLaterZqr() public {
-        ZyqorixVesting next = new ZyqorixVesting(address(accounts), address(zqr), 30 days);
+        ZyqorixVesting next = new ZyqorixVesting(address(accounts), 30 days);
         vesting.emergencyWithdraw(address(next));
         zqr.transfer(address(vesting), 5 ether);
         assertEq(vesting.available(), 0);

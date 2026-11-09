@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.36;
+pragma solidity 0.8.38;
 
 /*
  * ZYQORIX — Vesting Module
@@ -65,8 +65,9 @@ contract ZyqorixVesting is ReentrancyGuard {
     /* ------------------------------- Wiring ---------------------------- */
     /// @notice The accounts contract — the source of owner and admin authority. Immutable.
     IZyqorixAccounts public immutable accounts;
-    /// @notice The vested token (ZQR). Immutable.
-    address public immutable token;
+    /// @notice The vested token: ZQR at its BSC mainnet address. The anvil testnet has a mock etched there
+    ///         (chain/script/deploy-zqr.js), the same way USDT is.
+    address public constant token = 0x43ADE7aE5E14e6dadD0f6967a0aDEADe56095e70;
 
     /* ----------------------------- Positions --------------------------- */
     /// @notice One vesting record.
@@ -119,16 +120,14 @@ contract ZyqorixVesting is ReentrancyGuard {
     /* ----------------------------- Constructor ------------------------- */
     /// @notice Deploy the vesting contract.
     /// @param accountsAddr The deployed accounts contract.
-    /// @param tokenAddr The ZQR token.
     /// @param monthLength Seconds in a vesting month: 30 days, or 30 minutes on chain 31337 only.
-    /// @dev Reverts ZERO_ADDRESS / NOT_CONTRACT / BAD_MONTH.
-    constructor(address accountsAddr, address tokenAddr, uint256 monthLength) {
-        require(accountsAddr != address(0) && tokenAddr != address(0), "ZERO_ADDRESS");
-        require(accountsAddr.code.length > 0 && tokenAddr.code.length > 0, "NOT_CONTRACT");
+    /// @dev Reverts ZERO_ADDRESS / NOT_CONTRACT (also when ZQR has no code here) / BAD_MONTH.
+    constructor(address accountsAddr, uint256 monthLength) {
+        require(accountsAddr != address(0), "ZERO_ADDRESS");
+        require(accountsAddr.code.length > 0 && token.code.length > 0, "NOT_CONTRACT");
         require(monthLength == 30 days || (monthLength == 30 minutes && block.chainid == 31337), "BAD_MONTH");
         MONTH = monthLength;
         accounts = IZyqorixAccounts(accountsAddr);
-        token = tokenAddr;
     }
 
     /* ============================== ADMIN ============================== */
@@ -230,8 +229,9 @@ contract ZyqorixVesting is ReentrancyGuard {
 
     /// @notice ZQR `user` can claim right now.
     /// @param user The member.
-    /// @return amount The claimable ZQR.
+    /// @return amount The claimable ZQR (0 once the funds have moved to a replacement).
     function claimable(address user) external view returns (uint256 amount) {
+        if (migratedTo != address(0)) return 0;
         Position[] storage list = _positions[user];
         for (uint256 i = 0; i < list.length; i++) amount += _claimable(list[i]);
     }

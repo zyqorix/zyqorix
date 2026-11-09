@@ -8,10 +8,11 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "dev:mainnet": "VITE_NETWORK=bsc vite",
     "build:testnet": "VITE_NETWORK=anvil vite build",
     "postbuild": "cp dist/index.html dist/404.html && touch dist/.nojekyll",
     "postbuild:testnet": "cp dist/index.html dist/404.html && touch dist/.nojekyll",
-    "predeploy": "npm run build:testnet",
+    "predeploy": "npm run build",
     "deploy": "gh-pages -d dist --dotfiles --cname zyqorix.net"
   },
   "dependencies": {

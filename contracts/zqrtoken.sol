@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.36;
+pragma solidity >=0.8.37 <0.9.0;
 
 /*
  * ZYQORIX (ZQR)

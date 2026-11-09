@@ -1,32 +1,69 @@
-import { ArrowDownToLine, ArrowUpFromLine, Gift, Network } from "lucide-react";
+import { useAppKit } from "@reown/appkit/react";
+import { ArrowDownToLine, ArrowLeftRight, ArrowUpFromLine, BookOpen, Bot, CircleHelp, Gamepad2, Gift, Hourglass, Info, Network, Unplug, WalletMinimal } from "lucide-react";
 import { Link } from "react-router-dom";
-import { useAccount } from "wagmi";
-import { ConnectButton } from "../components/ConnectButton.jsx";
+import { useAccount, useDisconnect } from "wagmi";
 import { useUi } from "../components/Ui.jsx";
 import { useMember } from "../hooks/useMember.js";
 import { useNetwork } from "../hooks/useNetwork.js";
+
+// Home shortcuts: members see all of them, visitors only the public About pages. Every icon box uses the accent colour picked in the drawer.
+const SHORTCUTS = [
+  { label: "Deposit", icon: ArrowDownToLine, sheet: "deposit" },
+  { label: "Withdraw", icon: ArrowUpFromLine, sheet: "withdraw" },
+  { label: "Network", icon: Network, to: "/network" },
+  { label: "Rewards", icon: Gift, to: "/rewards" },
+  { label: "Vesting", icon: Hourglass, to: "/vesting" },
+  { label: "Swap", icon: ArrowLeftRight, to: "/swap" },
+  { label: "Bot", icon: Bot, to: "/bot" },
+  { label: "Games", icon: Gamepad2, to: "/games" },
+  { label: "About", icon: Info, to: "/about", isPublic: true },
+  { label: "Rewards Plan", icon: BookOpen, to: "/about/rewardsplan", isPublic: true },
+  { label: "FAQ", icon: CircleHelp, to: "/about/faq", isPublic: true },
+];
+
+/** Connect / disconnect as a chip beside the network label. The wallet address is never shown on Home. */
+function WalletChip() {
+  const { isConnected } = useAccount();
+  const { open } = useAppKit();
+  const { disconnect } = useDisconnect();
+  if (isConnected) {
+    return (
+      <button type="button" className="chip glass tap-scale text-white" onClick={() => disconnect()} aria-label="Disconnect wallet" title="Disconnect wallet">
+        <Unplug className="size-4" />
+      </button>
+    );
+  }
+  return (
+    <button type="button" className="chip glass tap-scale gap-1.5 text-white" onClick={() => open()}>
+      <WalletMinimal className="size-4" />
+      Connect
+    </button>
+  );
+}
 
 export default function Home() {
   const { openSheet } = useUi();
   const { isConnected } = useAccount();
   const { isMember, isLoading } = useMember();
   const { name, wrongNetwork, appNetwork, switchToApp } = useNetwork();
+  const shortcuts = SHORTCUTS.filter((s) => isMember || s.isPublic);
   return (
     <>
       <section className="bg-mesh shape-curve shape-bubbles relative px-5 pb-16 pt-[calc(var(--header-h)+env(safe-area-inset-top)+12px)] text-white">
-        <span className="chip glass mb-4 text-white">{name}</span>
+        <div className="mb-4 flex items-center gap-2">
+          <span className="chip glass text-white">{name}</span>
+          <WalletChip />
+        </div>
         <h1 className="text-[34px] font-extrabold leading-[1.1] text-balance">Welcome to ZYQORIX.</h1>
         <p className="mt-3 max-w-xs text-[14.5px] leading-relaxed text-white/80">{isConnected ? "Your wallet is connected." : "Connect your wallet to see your balances and your network."}</p>
+        <p className="mt-3 max-w-xs text-[14.5px] leading-relaxed text-white/80"><strong>What is your money doing</strong><br/> while you are sleeping?</p>
         {wrongNetwork && (
           <div className="mt-4">
             <p className="text-[13px] font-semibold">Your wallet is on {name}. ZYQORIX runs on {appNetwork}.</p>
             <button type="button" className="btn btn-white mt-2" onClick={switchToApp}>Switch to {appNetwork}</button>
           </div>
         )}
-        <div className="mt-6 flex flex-wrap items-center gap-2.5">
-          <ConnectButton />
-          {isConnected && !isMember && !isLoading && <Link to="/register" className="btn btn-white">Register</Link>}
-        </div>
+        {isConnected && !isMember && !isLoading && <div className="mt-6"><Link to="/register" className="btn btn-white">Register</Link></div>}
       </section>
 
       <section className="relative z-10 -mt-10 px-4">
@@ -36,14 +73,16 @@ export default function Home() {
         </div>
       </section>
 
-      {isMember && <section className="section pt-6">
+      <section className="section pt-6">
         <div className="grid grid-cols-4 gap-3 text-center text-[11.5px] font-semibold">
-          <button type="button" className="tap-scale flex flex-col items-center gap-2" onClick={() => openSheet("deposit")}><span className="icon-box icon-box-lg"><ArrowDownToLine className="size-5" /></span>Deposit</button>
-          <button type="button" className="tap-scale flex flex-col items-center gap-2" onClick={() => openSheet("withdraw")}><span className="icon-box icon-box-lg bg-emerald-500/12 text-emerald-500"><ArrowUpFromLine className="size-5" /></span>Withdraw</button>
-          <Link to="/network" className="tap-scale flex flex-col items-center gap-2"><span className="icon-box icon-box-lg bg-sky-500/12 text-sky-500"><Network className="size-5" /></span>Network</Link>
-          <Link to="/rewards" className="tap-scale flex flex-col items-center gap-2"><span className="icon-box icon-box-lg bg-amber-500/12 text-amber-500"><Gift className="size-5" /></span>Rewards</Link>
+          {shortcuts.map(({ label, icon: Icon, to, sheet }) => {
+            const body = <><span className="icon-box icon-box-lg bg-brand text-white shadow-glow"><Icon className="size-5" /></span>{label}</>;
+            return sheet
+              ? <button key={label} type="button" className="tap-scale flex flex-col items-center gap-2" onClick={() => openSheet(sheet)}>{body}</button>
+              : <Link key={label} to={to} className="tap-scale flex flex-col items-center gap-2">{body}</Link>;
+          })}
         </div>
-      </section>}
+      </section>
     </>
   );
 }

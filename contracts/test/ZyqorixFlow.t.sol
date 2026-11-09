@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.36;
+pragma solidity 0.8.38;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, stdStorage, StdStorage} from "forge-std/Test.sol";
 import {ZyqorixAccounts} from "../accounts.sol";
+import {ExchangerDisbursement} from "../exchangerdisbursement.sol";
 import {ZyqorixFunder} from "../funder.sol";
 import {ZyqorixGateway} from "../gateway.sol";
 import {ZyqorixLiquidity} from "../liquidity.sol";
@@ -80,6 +81,12 @@ contract MockPositionManager {
 
 /// @dev Every member action, in order, on the real contracts. Only PancakeSwap is mocked.
 contract ZyqorixFlowTest is Test {
+    using stdStorage for StdStorage;
+
+    /// @dev USDT's BSC mainnet address, hardcoded in funder, gateway, liquidity and the exchanger.
+    address constant USDT_ADDR = 0x55d398326f99059fF775485246999027B3197955;
+    /// @dev ZQR's mainnet address, hardcoded in vesting.sol and liquidity.sol. The mock is etched there.
+    address constant ZQR = 0x43ADE7aE5E14e6dadD0f6967a0aDEADe56095e70;
     uint256 constant JAN_15_2027 = 1799971200;
     uint256 constant FEB_01_2027 = 1801440000;
     uint256 constant DAY = 1 days;
@@ -106,18 +113,21 @@ contract ZyqorixFlowTest is Test {
 
     function setUp() public {
         vm.warp(JAN_15_2027);
-        usdt = new MockToken();
-        zqr = new MockToken();
+        // USDT's mainnet address is hardcoded in the contracts: etch the mock there.
+        vm.etch(USDT_ADDR, type(MockToken).runtimeCode);
+        usdt = MockToken(USDT_ADDR);
+        vm.etch(ZQR, type(MockToken).runtimeCode);
+        zqr = MockToken(ZQR);
         pool = new MockPool(address(usdt), address(zqr));
         router = new MockRouter();
         pm = new MockPositionManager();
 
         accounts = new ZyqorixAccounts();
-        funder = new ZyqorixFunder(address(accounts), address(usdt));
-        gateway = new ZyqorixGateway(address(accounts), address(usdt), address(funder));
+        funder = new ZyqorixFunder(address(accounts));
+        gateway = new ZyqorixGateway(address(accounts), address(funder));
         funder.setGateway(address(gateway));
         funder.setTradingWallet(trading);
-        vesting = new ZyqorixVesting(address(accounts), address(zqr), 30 days);
+        vesting = new ZyqorixVesting(address(accounts), 30 days);
         zqr.mint(address(vesting), 500_000_000 ether);
         rewards = new ZyqorixRewards(address(accounts), address(gateway), address(vesting), 1 days);
         accounts.addAdmin(address(rewards));
@@ -125,7 +135,7 @@ contract ZyqorixFlowTest is Test {
         funder.setRewards(address(rewards));
         reg = new ZyqorixRegister(address(accounts), address(gateway));
         accounts.addAdmin(address(reg));
-        lp = new ZyqorixLiquidity(address(usdt), address(zqr), address(pm), address(router));
+        lp = new ZyqorixLiquidity(address(pm), address(router));
         lp.initializePool(address(pool));
         lp.initializeApproval();
         gateway.setLiquidity(address(lp));
@@ -195,8 +205,8 @@ contract ZyqorixFlowTest is Test {
         assertEq(vesting.positionCount(alice), 1);
         assertEq(vesting.getPosition(alice, 0).amount, 50 ether); // 1:1 in this mock
         assertEq(usdt.balanceOf(address(lp)), 0);
-        assertEq(usdt.balanceOf(trading), 15 ether); // 10% of 150
-        assertEq(usdt.balanceOf(address(funder)), 100_135 ether); // the liquidity share stayed here
+        assertEq(usdt.balanceOf(trading), 90 ether); // 60% of 150
+        assertEq(usdt.balanceOf(address(funder)), 100_060 ether); // the liquidity share stayed here
         assertEq(rewards.agentBalance(leader), 7.5 ether); // 5% of all three, no capping used
 
         // 3) Claim passive.
@@ -241,12 +251,14 @@ contract ZyqorixFlowTest is Test {
         assertEq(rewards.capping(alice), 449.5 ether);
         assertEq(rewards.walletBalance(alice), 20.5 ether);
 
-        // 8) Withdraw. The swap and burn are skipped, and the fee stays with the funder.
+        // 8) Withdraw. The swap and burn are skipped, and the fee is booked into the reward pool.
         vm.warp(JAN_15_2027 + 3 * DAY);
         uint256 cash = usdt.balanceOf(alice);
         uint256 funderBefore = usdt.balanceOf(address(funder));
+        uint256 poolBefore = funder.rewardPool();
         vm.prank(alice);
         gateway.withdraw(20 ether);
+        assertEq(funder.rewardPool(), poolBefore + 2 ether);
         assertEq(usdt.balanceOf(alice), cash + 18 ether);
         assertEq(usdt.balanceOf(address(funder)), funderBefore - 18 ether);
         assertEq(usdt.balanceOf(address(gateway)), 0);
@@ -278,7 +290,7 @@ contract ZyqorixFlowTest is Test {
         _activate(sponsor, 0);
         _register(alice, sponsor);
         _activate(alice, 0);
-        assertEq(usdt.balanceOf(address(lp)), 1_050 ether); // 50% of both went to the position
+        assertEq(usdt.balanceOf(address(lp)), 1_020 ether); // 20% of both went to the position
         assertEq(vesting.positionCount(alice), 1);
         assertEq(vesting.getPosition(alice, 0).amount, 50 ether); // 1:1 in this mock
 
@@ -309,130 +321,64 @@ contract ZyqorixFlowTest is Test {
         assertEq(usdt.balanceOf(address(funder)), funderBefore - 18 ether);
     }
 
-    function _nextFunder() internal returns (ZyqorixFunder next) {
-        next = new ZyqorixFunder(address(accounts), address(usdt));
-        next.setGateway(address(gateway));
-        next.setRewards(address(rewards));
-        next.setTradingWallet(trading);
-    }
-
-    function test_migrateFunderMovesTheMoneyAndTheLedger() public {
-        _register(sponsor, owner);
-        _activate(sponsor, 0);
-        _register(alice, sponsor);
-        _activate(alice, 0);
-        vm.warp(JAN_15_2027 + 2 * DAY);
-
-        uint256 balance = usdt.balanceOf(address(funder));
+    /// @dev End to end with an empty reward pool: activation and the daily claim work, the deposit part can be
+    ///      withdrawn, the reward part waits for fundRewards.
+    function test_emptyPoolActivationAndWithdrawalWaitForFunding() public {
         uint256 pool = funder.rewardPool();
-        uint256 reserved = rewards.unreservedPool();
-        assertEq(funder.tradingCapitalOut(), 10 ether);
-
-        ZyqorixFunder next = _nextFunder();
-        gateway.migrateFunder(address(next));
-
-        assertEq(address(gateway.funder()), address(next));
-        assertEq(usdt.balanceOf(address(funder)), 0);
-        assertEq(usdt.balanceOf(address(next)), balance);
-        assertEq(next.rewardPool(), pool);
-        assertEq(next.tradingCapitalOut(), 10 ether);
-        assertEq(rewards.unreservedPool(), reserved);
-
-        // Claims, deposits, withdrawals and activations all carry on against the new funder.
+        stdstore.target(address(funder)).sig("rewardPool()").checked_write(uint256(0));
+        _register(alice, owner);
+        _activate(alice, 0);
+        _deposit(alice, 50 ether);
+        vm.warp(JAN_15_2027 + 20 * DAY);
         vm.prank(alice);
-        assertEq(rewards.claimDaily(), 1 ether);
-        assertEq(next.rewardPool(), pool - 1 ether);
+        assertEq(rewards.claimDaily(), 10 ether);
+        vm.warp(JAN_15_2027 + 22 * DAY);
 
-        _deposit(alice, 119 ether);
-        assertEq(usdt.balanceOf(address(next)), balance + 119 ether);
-        _activate(alice, 1);
-        assertEq(next.tradingCapitalOut(), 20 ether);
+        vm.prank(alice);
+        vm.expectRevert("INSUFFICIENT_REWARD_POOL");
+        gateway.withdraw(60 ether); // 50 of deposit, 10 of reward credit
+        vm.prank(alice);
+        gateway.withdraw(40 ether);
 
-        vm.warp(JAN_15_2027 + 4 * DAY);
-        uint256 cash = usdt.balanceOf(alice);
+        vm.warp(JAN_15_2027 + 24 * DAY);
+        vm.prank(alice);
+        vm.expectRevert("INSUFFICIENT_REWARD_POOL");
+        gateway.withdraw(20 ether);
+        stdstore.target(address(funder)).sig("rewardPool()").checked_write(pool);
         vm.prank(alice);
         gateway.withdraw(20 ether);
-        assertEq(usdt.balanceOf(alice), cash + 18 ether);
-
-        // Capital still comes back first: $20 is outstanding, so only the rest is profit.
-        usdt.mint(trading, 5 ether); // $5 of trading profit on top of the $20 it was sent
-        vm.startPrank(trading);
-        usdt.approve(address(next), 25 ether);
-        next.fundRewards(25 ether);
-        vm.stopPrank();
-        assertEq(next.tradingCapitalReturned(), 20 ether);
-        assertEq(next.rewardPool(), pool - 1 ether + 5 ether);
+        assertEq(rewards.walletBalance(alice), 0);
+        assertEq(funder.rewardPool(), pool - 8 ether); // 10 drawn, the last 2 fee booked back
     }
 
-    function test_oldFunderIsCutOffAfterMigrating() public {
-        gateway.migrateFunder(address(_nextFunder()));
-        vm.startPrank(trading);
-        usdt.mint(trading, 10 ether);
-        usdt.approve(address(funder), 10 ether);
-        vm.expectRevert("NOT_FUNDER");
-        funder.fundRewards(10 ether);
-        vm.stopPrank();
-
-        vm.expectRevert("LEDGER_NOT_EMPTY"); // going back would overwrite a live ledger's copy
-        gateway.migrateFunder(address(funder));
-    }
-
-    function test_migrateFunderGates() public {
-        ZyqorixFunder next = _nextFunder();
-
-        vm.prank(alice);
-        vm.expectRevert("NOT_OWNER");
-        gateway.migrateFunder(address(next));
-
-        vm.expectRevert("SAME_FUNDER");
-        gateway.migrateFunder(address(funder));
-
-        ZyqorixFunder noRewards = new ZyqorixFunder(address(accounts), address(usdt));
-        noRewards.setGateway(address(gateway));
-        vm.expectRevert("FUNDER_NOT_LINKED");
-        gateway.migrateFunder(address(noRewards));
-
-        ZyqorixFunder noWallet = new ZyqorixFunder(address(accounts), address(usdt));
-        noWallet.setGateway(address(gateway));
-        noWallet.setRewards(address(rewards));
-        vm.expectRevert("TRADING_WALLET_NOT_SET");
-        gateway.migrateFunder(address(noWallet));
-
-        vm.prank(alice);
-        vm.expectRevert("NOT_GATEWAY");
-        next.importLedger(1, 0, 0, 1);
-
-        assertEq(address(gateway.funder()), address(funder)); // failed attempts change nothing
-    }
-
-    function test_lockFunderClosesMigrationForGood() public {
-        _mintPosition();
-        lp.lockLiquidity();
-        gateway.lockFunder();
-        ZyqorixFunder next = _nextFunder();
-        vm.expectRevert("FUNDER_LOCKED");
-        gateway.migrateFunder(address(next));
-    }
-
-    function test_activationNeedsAReadablePrice() public {
-        ZyqorixLiquidity noPool = new ZyqorixLiquidity(address(usdt), address(zqr), address(pm), address(router));
+    function test_unreadablePriceFallsBackToLastPrice() public {
+        // No pool bound yet: the TWAP read reverts, so the seeded lastPrice (0.001) prices the position.
+        ZyqorixLiquidity noPool = new ZyqorixLiquidity(address(pm), address(router));
         gateway.setLiquidity(address(noPool));
         _register(alice, owner);
+        vm.expectEmit(address(rewards));
+        emit ZyqorixRewards.PriceFallbackUsed(alice, 1e15);
         vm.prank(alice);
-        vm.expectRevert("Pool not initialized");
         rewards.activate(0);
-
-        gateway.setLiquidity(address(lp));
-        pool.setObserveFails(true); // no TWAP history yet
-        vm.prank(alice);
-        vm.expectRevert("TwapPriceFailed");
-        rewards.activate(0);
-        assertEq(rewards.walletBalance(alice), 50 ether);
-        assertEq(rewards.nextTier(alice), 0);
-
-        pool.setObserveFails(false);
-        _activate(alice, 0);
+        assertEq(vesting.getPosition(alice, 0).amount, 50_000 ether);
         assertEq(rewards.capping(alice), 150 ether);
+        assertEq(rewards.lastPriceAt(), 0);
+
+        // Oracle without history: same fallback.
+        gateway.setLiquidity(address(lp));
+        pool.setObserveFails(true);
+        _register(sponsor, owner);
+        vm.prank(sponsor);
+        rewards.activate(0);
+        assertEq(vesting.getPosition(sponsor, 0).amount, 50_000 ether);
+
+        // Once the TWAP reads, it prices the position (1:1 here) and becomes lastPrice.
+        pool.setObserveFails(false);
+        _deposit(alice, 100 ether);
+        _activate(alice, 1);
+        assertEq(vesting.getPosition(alice, 1).amount, 100 ether);
+        assertEq(rewards.lastPrice(), 1 ether);
+        assertEq(rewards.lastPriceAt(), block.timestamp);
     }
 
     function test_memberDepositMinimum() public {
@@ -496,13 +442,14 @@ contract ZyqorixFlowTest is Test {
         _register(alice, owner);
         usdt.mint(alice, 5_000 ether);
         _deposit(alice, 3_100 ether);
+        _activate(alice, 0); // the 60/120-day counters run from the first activation
         vm.warp(JAN_15_2027 + 120 * DAY);
 
         vm.prank(alice);
         vm.expectRevert("TIER_SKIPPED");
         rewards.activate(5);
 
-        for (uint256 tier = 0; tier < 6; tier++) _activate(alice, tier);
+        for (uint256 tier = 1; tier < 6; tier++) _activate(alice, tier);
         assertEq(rewards.nextTier(alice), 6);
         assertEq(rewards.activeTiers(alice).length, 6);
 
@@ -520,8 +467,9 @@ contract ZyqorixFlowTest is Test {
         _register(alice, owner);
         usdt.mint(alice, 5_000 ether);
         _deposit(alice, 3_100 ether);
+        _activate(alice, 0); // the 60/120-day counters run from the first activation
         vm.warp(JAN_15_2027 + 120 * DAY);
-        for (uint256 tier = 0; tier < 6; tier++) _activate(alice, tier);
+        for (uint256 tier = 1; tier < 6; tier++) _activate(alice, tier);
 
         for (uint256 round = 1; round <= 2; round++) {
             vm.warp(JAN_15_2027 + (120 + round * 1_000) * DAY); // every open tier caps
@@ -536,11 +484,31 @@ contract ZyqorixFlowTest is Test {
             vm.expectRevert("TIER_ACTIVE");
             rewards.activate(5); // not again until this one caps
             vm.stopPrank();
-            assertEq(rewards.capping(alice), 4_800 ether);
-            assertEq(rewards.tierCapping(alice, 5), 4_800 ether);
+            assertEq(rewards.capping(alice), 3_200 ether); // 2x every time, not only the first
+            assertEq(rewards.tierCapping(alice, 5), 3_200 ether);
             assertEq(rewards.activeTiers(alice).length, 1);
             assertEq(vesting.positionCount(alice), 6 + round);
         }
+    }
+
+    function test_lastTierGivesTwoTimesCapping() public {
+        _register(alice, owner);
+        usdt.mint(alice, 5_000 ether);
+        _deposit(alice, 3_100 ether);
+        _activate(alice, 0); // the 60/120-day counters run from the first activation
+        vm.warp(JAN_15_2027 + 120 * DAY);
+        for (uint256 tier = 1; tier < 5; tier++) _activate(alice, tier);
+        assertEq(rewards.tierCapping(alice, 4), 2_400 ether); // $800 keeps 3x
+
+        uint256 pool = funder.rewardPool();
+        uint256 capping = rewards.capping(alice);
+        _activate(alice, 5);
+
+        assertEq(rewards.tierCapping(alice, 5), 3_200 ether);
+        assertEq(rewards.capping(alice) - capping, 3_200 ether);
+        assertEq(funder.rewardPool(), pool); // nothing is reserved from the pool at activation
+        assertEq(rewards.capBps(4), 30_000);
+        assertEq(rewards.capBps(5), 20_000);
     }
 
     function test_aCappedTierCannotBeActivatedAgain() public {
@@ -564,5 +532,457 @@ contract ZyqorixFlowTest is Test {
         _activate(alice, 0);
         assertEq(rewards.walletBalance(sponsor), 0.5 ether); // wanted 2.5
         assertEq(rewards.capping(sponsor), 0);
+    }
+
+    /// @dev The funder's trading wallet is the exchanger disbursement contract: an activation's trading
+    ///      share lands there and only leaves split equally across the exchangers.
+    function test_tradingShareGoesToTheExchangerDisbursement() public {
+        ExchangerDisbursement disb = new ExchangerDisbursement(owner);
+        address ex1 = makeAddr("ex1");
+        address ex2 = makeAddr("ex2");
+        disb.addExchanger(ex1);
+        disb.addExchanger(ex2);
+        funder.setTradingWallet(address(disb));
+
+        _register(leader, owner);
+        uint256 outBefore = funder.tradingCapitalOut();
+        _activate(leader, 0);
+        uint256 share = funder.tradingCapitalOut() - outBefore;
+        assertGt(share, 0);
+        assertEq(usdt.balanceOf(address(disb)), share);
+
+        vm.prank(ex1);
+        disb.disburseFunding();
+        assertEq(usdt.balanceOf(ex1), share / 2);
+        assertEq(usdt.balanceOf(ex2), share / 2);
+        assertEq(usdt.balanceOf(address(disb)), share % 2);
+    }
+
+    /* ----------------------------- Funding wallets ---------------------------- */
+    address fundingWallet = makeAddr("fundingWallet");
+
+    /// @dev The funder itself pulls the funding wallets; this adds the first one.
+    function _puller() internal returns (ZyqorixFunder puller) {
+        puller = funder;
+        puller.addFundingWallet(fundingWallet);
+    }
+
+    /// @dev Alice holds 50 of deposit and 10 of reward credit, and the reward pool is empty.
+    function _aliceWithCreditAndEmptyPool() internal {
+        stdstore.target(address(funder)).sig("rewardPool()").checked_write(uint256(0));
+        _register(alice, owner);
+        _activate(alice, 0);
+        _deposit(alice, 50 ether);
+        vm.warp(JAN_15_2027 + 20 * DAY);
+        vm.prank(alice);
+        assertEq(rewards.claimDaily(), 10 ether);
+        vm.warp(JAN_15_2027 + 22 * DAY);
+    }
+
+    function test_pullerPendingIsBalanceCappedByAllowance() public {
+        ZyqorixFunder puller = funder;
+        usdt.mint(fundingWallet, 30 ether);
+        assertEq(puller.pendingFunding(), 0); // no funding wallet set
+        assertEq(puller.pullFunding(), 0);
+        puller.addFundingWallet(fundingWallet);
+        assertEq(puller.pendingFunding(), 0); // not approved yet
+        vm.prank(fundingWallet);
+        usdt.approve(address(puller), 20 ether);
+        assertEq(puller.pendingFunding(), 20 ether);
+        vm.prank(fundingWallet);
+        usdt.approve(address(puller), type(uint256).max);
+        assertEq(puller.pendingFunding(), 30 ether);
+        vm.prank(fundingWallet);
+        usdt.approve(address(puller), 0); // revoked
+        assertEq(puller.pendingFunding(), 0);
+        assertEq(puller.pullFunding(), 0);
+        assertEq(usdt.balanceOf(fundingWallet), 30 ether);
+    }
+
+    /// @dev A pull is booked exactly like fundRewards: all of it is trading profit for the reward pool. The trading
+    ///      capital that went out is never repaid first.
+    function test_pullBooksEverythingToThePool() public {
+        ZyqorixFunder puller = _puller();
+        stdstore.target(address(funder)).sig("rewardPool()").checked_write(uint256(0));
+        _register(alice, owner);
+        uint256 outBefore = funder.tradingCapitalOut();
+        _activate(alice, 0); // 60% (30 USDT) leaves for trading
+        assertEq(funder.tradingCapitalOut() - outBefore, 30 ether);
+
+        usdt.mint(fundingWallet, 45 ether);
+        vm.prank(fundingWallet);
+        usdt.approve(address(puller), type(uint256).max);
+        uint256 held = usdt.balanceOf(address(funder));
+        vm.prank(alice); // anyone can trigger it
+        assertEq(puller.pullFunding(), 45 ether);
+        assertEq(usdt.balanceOf(fundingWallet), 0);
+        assertEq(usdt.balanceOf(address(funder)), held + 45 ether);
+        assertEq(funder.rewardPool(), 45 ether);
+        assertEq(funder.tradingCapitalOut() - outBefore, 30 ether); // only counted, not repaid
+    }
+
+    /// @dev Member deposits already in the funder are never booked into the reward pool by a pull.
+    function test_pullNeverBooksMemberDeposits() public {
+        ZyqorixFunder puller = _puller();
+        _register(alice, owner);
+        _deposit(alice, 500 ether);
+        uint256 deposits = rewards.walletBalance(alice);
+        uint256 pool = funder.rewardPool();
+        assertEq(puller.pullFunding(), 0); // the wallet holds nothing
+        usdt.mint(fundingWallet, 5 ether);
+        vm.prank(fundingWallet);
+        usdt.approve(address(puller), type(uint256).max);
+        assertEq(puller.pullFunding(), 5 ether); // only what the wallet sent
+        assertEq(funder.rewardPool(), pool + 5 ether);
+        assertEq(rewards.walletBalance(alice), deposits);
+    }
+
+    event RewardsFunded(address indexed from, uint256 amount);
+
+    function test_bookingEmitsRewardsFunded() public {
+        ZyqorixFunder puller = _puller();
+        usdt.mint(fundingWallet, 7 ether);
+        vm.prank(fundingWallet);
+        usdt.approve(address(puller), type(uint256).max);
+        vm.expectEmit(true, false, false, true, address(funder));
+        emit RewardsFunded(address(funder), 7 ether);
+        puller.pullFunding();
+
+        usdt.mint(trading, 3 ether);
+        vm.startPrank(trading);
+        usdt.approve(address(funder), 3 ether);
+        vm.expectEmit(true, false, false, true, address(funder));
+        emit RewardsFunded(trading, 3 ether);
+        funder.fundRewards(3 ether);
+        vm.stopPrank();
+    }
+
+    /// @dev Returned trading capital must never book as profit, so one wallet can't be both.
+    function test_tradingWalletCanNeverBeAFundingWallet() public {
+        vm.expectRevert("TRADING_WALLET");
+        funder.addFundingWallet(trading);
+        funder.addFundingWallet(fundingWallet);
+        vm.expectRevert("FUNDING_WALLET");
+        funder.setTradingWallet(fundingWallet);
+    }
+
+    function test_fundingWalletAdminIsOwnerOnly() public {
+        ZyqorixFunder puller = _puller();
+        vm.prank(alice);
+        vm.expectRevert("NOT_OWNER");
+        puller.addFundingWallet(alice);
+        ZyqorixFunder unwired = new ZyqorixFunder(address(accounts));
+        vm.expectRevert("REWARDS_NOT_SET");
+        unwired.pullFunding();
+    }
+
+    /// @dev The withdrawal that needs the pool pulls the funding wallet in first, with no other transaction.
+    function test_pullerWalletListIsOwnerManagedAndBounded() public {
+        ZyqorixFunder puller = _puller();
+        assertEq(puller.walletCount(), 1);
+        vm.expectRevert("ALREADY_ADDED");
+        puller.addFundingWallet(fundingWallet);
+        vm.expectRevert("ZERO_ADDRESS");
+        puller.addFundingWallet(address(0));
+        for (uint256 i = 0; i < 4; i++) puller.addFundingWallet(address(uint160(0xF000 + i)));
+        assertEq(puller.walletCount(), 5);
+        vm.expectRevert("TOO_MANY_WALLETS");
+        puller.addFundingWallet(address(0xF100));
+
+        vm.prank(alice);
+        vm.expectRevert("NOT_OWNER");
+        puller.removeFundingWallet(fundingWallet);
+        vm.expectRevert("NOT_FUNDING_WALLET");
+        puller.removeFundingWallet(alice);
+        puller.removeFundingWallet(fundingWallet); // the first: the last one moves into its slot
+        assertFalse(puller.isFundingWallet(fundingWallet));
+        address[] memory list = puller.fundingWallets();
+        assertEq(list.length, 4);
+        assertEq(list[0], address(uint160(0xF003)));
+        puller.removeFundingWallet(address(uint160(0xF003))); // removing the new first again
+        puller.removeFundingWallet(address(uint160(0xF001))); // the last one
+        list = puller.fundingWallets();
+        assertEq(list.length, 2);
+        assertEq(list[0], address(uint160(0xF002)));
+        assertEq(list[1], address(uint160(0xF000)));
+    }
+
+    /// @dev Every approved wallet is pulled and booked once; an unapproved one is skipped; a removed one is left.
+    function test_pullSumsEveryFundingWallet() public {
+        ZyqorixFunder puller = _puller();
+        address second = makeAddr("second");
+        address third = makeAddr("third");
+        puller.addFundingWallet(second);
+        puller.addFundingWallet(third);
+        usdt.mint(fundingWallet, 30 ether);
+        usdt.mint(second, 40 ether);
+        usdt.mint(third, 50 ether); // never approved
+        vm.prank(fundingWallet);
+        usdt.approve(address(puller), 10 ether);
+        vm.prank(second);
+        usdt.approve(address(puller), type(uint256).max);
+        assertEq(puller.pendingOf(fundingWallet), 10 ether);
+        assertEq(puller.pendingOf(third), 0);
+        assertEq(puller.pendingFunding(), 50 ether);
+
+        uint256 pool = funder.rewardPool();
+        vm.expectEmit(true, true, false, true, address(puller));
+        emit ZyqorixFunder.FundingPulled(fundingWallet, 10 ether);
+        vm.expectEmit(true, true, false, true, address(puller));
+        emit ZyqorixFunder.FundingPulled(second, 40 ether);
+        assertEq(puller.pullFunding(), 50 ether);
+        assertEq(funder.rewardPool(), pool + 50 ether);
+        assertEq(usdt.balanceOf(fundingWallet), 20 ether);
+        assertEq(usdt.balanceOf(second), 0);
+        assertEq(usdt.balanceOf(third), 50 ether);
+
+        puller.removeFundingWallet(fundingWallet);
+        assertEq(puller.pendingFunding(), 0); // its remaining 10 approval no longer counts
+        assertEq(puller.pullFunding(), 0);
+        assertEq(usdt.balanceOf(fundingWallet), 20 ether);
+    }
+
+    function test_withdrawalAutoPullsAcrossWallets() public {
+        _aliceWithCreditAndEmptyPool();
+        ZyqorixFunder puller = _puller();
+        address second = makeAddr("second");
+        puller.addFundingWallet(second);
+        usdt.mint(fundingWallet, 4 ether);
+        usdt.mint(second, 6 ether); // together they cover the 10 of credit
+        vm.prank(fundingWallet);
+        usdt.approve(address(puller), type(uint256).max);
+        vm.prank(second);
+        usdt.approve(address(puller), type(uint256).max);
+        assertEq(rewards.withdrawable(alice), 60 ether);
+
+        vm.prank(alice);
+        gateway.withdraw(60 ether);
+        assertEq(usdt.balanceOf(fundingWallet), 0);
+        assertEq(usdt.balanceOf(second), 0);
+        assertEq(funder.rewardPool(), 6 ether); // the 6 fee was booked back
+        assertEq(rewards.rewardCredit(alice), 0);
+    }
+
+    /// @dev A wallet whose transferFrom fails is skipped; the others are still booked.
+    function test_pullSkipsAFailingWallet() public {
+        ZyqorixFunder puller = _puller();
+        address second = makeAddr("second");
+        puller.addFundingWallet(second);
+        usdt.mint(fundingWallet, 30 ether);
+        usdt.mint(second, 40 ether);
+        vm.prank(fundingWallet);
+        usdt.approve(address(puller), type(uint256).max);
+        vm.prank(second);
+        usdt.approve(address(puller), type(uint256).max);
+        vm.mockCallRevert(
+            address(usdt),
+            abi.encodeWithSelector(usdt.transferFrom.selector, fundingWallet, address(puller), 30 ether),
+            "BLOCKED"
+        );
+        uint256 pool = funder.rewardPool();
+        assertEq(puller.pullFunding(), 40 ether);
+        assertEq(funder.rewardPool(), pool + 40 ether);
+        assertEq(usdt.balanceOf(fundingWallet), 30 ether);
+        assertEq(usdt.balanceOf(second), 0);
+    }
+
+    /// @dev The worst case for a withdrawal: all five wallets pulled. Measures the gas the app has to cover.
+    function test_withdrawalPullingFiveWalletsGas() public {
+        _aliceWithCreditAndEmptyPool();
+        ZyqorixFunder puller = _puller();
+        for (uint256 i = 0; i < 5; i++) {
+            address wallet = i == 0 ? fundingWallet : makeAddr(string(abi.encode("w", i)));
+            if (i > 0) puller.addFundingWallet(wallet);
+            usdt.mint(wallet, 10 ether / 5 + 1 ether);
+            vm.prank(wallet);
+            usdt.approve(address(puller), type(uint256).max);
+        }
+        uint256 start = gasleft();
+        vm.prank(alice);
+        gateway.withdraw(60 ether);
+        uint256 used = start - gasleft();
+        emit log_named_uint("withdraw with a 5-wallet pull, gas", used);
+        assertEq(rewards.rewardCredit(alice), 0);
+        assertLt(used, 1_100_000);
+    }
+
+    function test_withdrawalAutoPullsTheFundingWallet() public {
+        _aliceWithCreditAndEmptyPool();
+        ZyqorixFunder puller = _puller();
+        usdt.mint(fundingWallet, 45 ether);
+        assertEq(rewards.withdrawable(alice), 50 ether); // not approved: only the deposit part
+
+        vm.prank(alice);
+        vm.expectRevert("INSUFFICIENT_REWARD_POOL");
+        gateway.withdraw(60 ether);
+        assertEq(usdt.balanceOf(fundingWallet), 45 ether); // the revert undid the pull too
+
+        vm.prank(fundingWallet);
+        usdt.approve(address(puller), type(uint256).max);
+        // 45 waiting covers all 10 of the credit.
+        assertEq(rewards.withdrawable(alice), 60 ether);
+        uint256 before = usdt.balanceOf(alice);
+        vm.prank(alice);
+        gateway.withdraw(60 ether);
+        assertEq(usdt.balanceOf(alice), before + 54 ether); // 10% fee
+        assertEq(usdt.balanceOf(fundingWallet), 0);
+        assertEq(funder.rewardPool(), 41 ether); // 45 booked, 10 drawn, the 6 fee booked back
+        assertEq(rewards.rewardCredit(alice), 0);
+    }
+
+    /// @dev A withdrawal the pool already covers never touches the funding wallet.
+    function test_noPullWhileThePoolCovers() public {
+        ZyqorixFunder puller = _puller();
+        usdt.mint(fundingWallet, 30 ether);
+        vm.prank(fundingWallet);
+        usdt.approve(address(puller), type(uint256).max);
+        _register(alice, owner);
+        _activate(alice, 0);
+        vm.warp(JAN_15_2027 + 40 * DAY);
+        vm.prank(alice);
+        assertEq(rewards.claimDaily(), 20 ether);
+        vm.prank(alice);
+        gateway.withdraw(20 ether);
+        assertEq(usdt.balanceOf(fundingWallet), 30 ether);
+    }
+
+    function test_brokenPullNeverBlocksAWithdrawal() public {
+        _aliceWithCreditAndEmptyPool();
+        vm.mockCallRevert(address(funder), abi.encodeWithSelector(funder.pullFunding.selector), "PULL_BROKEN");
+        vm.mockCallRevert(address(funder), abi.encodeWithSelector(funder.pendingFunding.selector), "PENDING_BROKEN");
+        assertEq(rewards.withdrawable(alice), 50 ether); // a reverting pending() doesn't break the view
+        vm.prank(alice);
+        vm.expectRevert("INSUFFICIENT_REWARD_POOL");
+        gateway.withdraw(60 ether);
+        vm.prank(alice);
+        gateway.withdraw(40 ether); // free part only
+        assertEq(rewards.walletBalance(alice), 20 ether);
+    }
+
+    /// @dev Paying an activation from reward credit pulls the funding wallet in as well.
+    function test_activationFromCreditAutoPulls() public {
+        stdstore.target(address(funder)).sig("rewardPool()").checked_write(uint256(0));
+        _register(alice, owner);
+        _activate(alice, 0);
+        vm.warp(JAN_15_2027 + 60 * DAY);
+        vm.prank(alice);
+        assertEq(rewards.claimDaily(), 30 ether);
+        _deposit(alice, 70 ether); // 70 free + 30 credit pays the 100 tier
+        vm.prank(alice);
+        vm.expectRevert("INSUFFICIENT_REWARD_POOL");
+        rewards.activate(1);
+
+        ZyqorixFunder puller = _puller();
+        usdt.mint(fundingWallet, 100 ether);
+        vm.prank(fundingWallet);
+        usdt.approve(address(puller), type(uint256).max);
+        _activate(alice, 1);
+        assertEq(usdt.balanceOf(fundingWallet), 0);
+        assertEq(rewards.rewardCredit(alice), 0);
+        assertEq(funder.rewardPool(), 82 ether); // 100 pulled - 18 drawn (the trading 60% of the 30 of credit; no position, so the liquidity share stayed)
+    }
+
+    /* ------------------- Sole member: the funder holds little ------------------- */
+    address fundingWallet2 = makeAddr("fundingWallet2");
+
+    /// @dev Two funding wallets, each approved and holding exactly `each`.
+    function _twoFundingWallets(uint256 each) internal {
+        funder.addFundingWallet(fundingWallet);
+        funder.addFundingWallet(fundingWallet2);
+        usdt.mint(fundingWallet, each);
+        usdt.mint(fundingWallet2, each);
+        vm.prank(fundingWallet);
+        usdt.approve(address(funder), each);
+        vm.prank(fundingWallet2);
+        usdt.approve(address(funder), each);
+    }
+
+    /// @dev The only member on the system: one $50 activation, 200 days of daily rewards claimed (100 of credit).
+    ///      The funder holds just the 20 the activation left behind (no position is minted here, so the liquidity
+    ///      share stays), and the reward pool is empty.
+    function _soleMemberAfter200Days() internal {
+        deal(address(usdt), address(funder), 0);
+        stdstore.target(address(funder)).sig("rewardPool()").checked_write(uint256(0));
+        _register(alice, owner);
+        _activate(alice, 0);
+        assertEq(usdt.balanceOf(address(funder)), 20 ether); // 50 in, 30 out as trading capital
+        vm.warp(JAN_15_2027 + 200 * DAY);
+        vm.prank(alice);
+        assertEq(rewards.claimDaily(), 100 ether);
+        assertEq(rewards.rewardCredit(alice), 100 ether);
+    }
+
+    function test_soleMemberWithdrawalPullsFundingWallets() public {
+        _soleMemberAfter200Days();
+        _twoFundingWallets(100 ether);
+        assertEq(rewards.withdrawable(alice), 100 ether); // 200 waiting covers it
+
+        uint256 before = usdt.balanceOf(alice);
+        vm.prank(alice);
+        gateway.withdraw(100 ether);
+        assertEq(usdt.balanceOf(alice), before + 90 ether); // 10% fee
+        assertEq(usdt.balanceOf(fundingWallet), 0);
+        assertEq(usdt.balanceOf(fundingWallet2), 0);
+        assertEq(funder.rewardPool(), 110 ether); // 200 pulled - 100 drawn + the 10 fee booked back
+        assertEq(rewards.walletBalance(alice), 0);
+    }
+
+    function test_soleMemberReactivatesFromCreditWithoutAnAdmin() public {
+        _soleMemberAfter200Days();
+        _twoFundingWallets(100 ether);
+        _activate(alice, 1); // 100 of credit pays the $100 tier
+        assertEq(rewards.nextTier(alice), 2);
+        assertEq(rewards.walletBalance(alice), 0);
+        assertEq(usdt.balanceOf(fundingWallet) + usdt.balanceOf(fundingWallet2), 0);
+        assertEq(funder.rewardPool(), 140 ether); // 200 pulled - 60 drawn (trading 60% of the 100 of credit; no position, so the liquidity share stayed)
+    }
+
+    function test_soleMemberWithdrawalStillRevertsWithoutFunding() public {
+        _soleMemberAfter200Days();
+        vm.prank(alice);
+        vm.expectRevert("INSUFFICIENT_REWARD_POOL");
+        gateway.withdraw(100 ether);
+    }
+
+    function test_shortFunderRevertLeavesTheWalletUntouched() public {
+        _register(alice, owner); // 50 of deposit
+        deal(address(usdt), address(funder), 10 ether); // short, and no funding wallets to pull
+        vm.warp(JAN_15_2027 + DAY + 1);
+        uint256 cool = gateway.coolDown(alice);
+        vm.prank(alice);
+        vm.expectRevert("INSUFFICIENT_FUNDER");
+        gateway.withdraw(40 ether);
+        assertEq(rewards.walletBalance(alice), 50 ether);
+        assertEq(rewards.rewardCredit(alice), 0);
+        assertEq(gateway.coolDown(alice), cool);
+    }
+
+    function test_freeBalanceWithdrawalPullsWhenTheFunderIsShort() public {
+        _register(alice, owner); // 50 of deposit, no reward credit
+        deal(address(usdt), address(funder), 10 ether); // the rest is out as trading capital
+        _twoFundingWallets(50 ether);
+        vm.warp(JAN_15_2027 + DAY + 1); // past the deposit cooldown
+        uint256 before = usdt.balanceOf(alice);
+        vm.prank(alice);
+        gateway.withdraw(40 ether);
+        assertEq(usdt.balanceOf(alice), before + 36 ether);
+        assertEq(usdt.balanceOf(fundingWallet) + usdt.balanceOf(fundingWallet2), 0);
+    }
+
+    function test_agentWithdrawalPullsWhenTheFunderIsShort() public {
+        _register(leader, owner);
+        rewards.setAgent(leader, true);
+        _activate(leader, 0);
+        _register(alice, leader);
+        _activate(alice, 0);
+        assertEq(rewards.agentBalance(leader), 5 ether); // 5% of both activations
+        deal(address(usdt), address(funder), 0);
+        _twoFundingWallets(50 ether);
+        vm.warp(JAN_15_2027 + DAY + 1); // past the deposit cooldown
+        uint256 before = usdt.balanceOf(leader);
+        vm.prank(leader);
+        gateway.withdrawAgent(5 ether);
+        assertEq(usdt.balanceOf(leader), before + 5 ether);
+        assertEq(usdt.balanceOf(fundingWallet) + usdt.balanceOf(fundingWallet2), 0);
     }
 }

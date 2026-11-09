@@ -10,12 +10,12 @@ import { ACCOUNTS_ABI, CONTRACTS, REGISTER_ABI, REWARDS_ABI } from "../config/co
 import { useMember } from "../hooks/useMember.js";
 import { useNetwork } from "../hooks/useNetwork.js";
 import { clearStoredSponsor, getStoredSponsor } from "../lib/affiliate.js";
-import { ACTIVE_CHAIN_ID, network } from "../lib/appkit.js";
+import { ACTIVE_CHAIN_ID } from "../lib/appkit.js";
 import { money as usdt } from "../lib/format.js";
-import { reason, send } from "../lib/tx.js";
+import { ensureAllowance, reason, send } from "../lib/tx.js";
 
 const chainId = ACTIVE_CHAIN_ID;
-const GAS_SYMBOL = network.nativeCurrency.symbol;
+const GAS_SYMBOL = "BNB"; // ZYQORIX runs on BSC; the anvil testnet stands in for it
 const GAS_UNITS = 600_000n; // approve plus register, with room to spare
 
 function CheckRow({ ok, label, value }) {
@@ -63,38 +63,40 @@ function RegisterForm({ address, from }) {
       { address: CONTRACTS.accounts, abi: ACCOUNTS_ABI, functionName: "isUser", args: [trimmed], chainId },
       { address: CONTRACTS.rewards, abi: REWARDS_ABI, functionName: "isActive", args: [trimmed], chainId },
       { address: CONTRACTS.accounts, abi: ACCOUNTS_ABI, functionName: "root", chainId },
+      { address: CONTRACTS.rewards, abi: REWARDS_ABI, functionName: "isAgent", args: [trimmed], chainId },
     ],
     allowFailure: false,
     query: { enabled: validFormat && !self },
   });
-  const [sponsorIsMember, sponsorHasCapping, root] = sponsorFacts ?? [];
-  // The root wallet starts the tree, so it can sponsor before anyone has capping.
+  const [sponsorIsMember, sponsorHasCapping, root, sponsorIsAgent] = sponsorFacts ?? [];
+  // The root wallet starts the tree, so it can sponsor before anyone has capping. Agents may sponsor without capping.
   const sponsorIsRoot = root !== undefined && trimmed.toLowerCase() === root.toLowerCase();
-  const sponsorActive = sponsorIsMember === true && (sponsorIsRoot || sponsorHasCapping === true);
+  const sponsorValid = sponsorIsMember === true && (sponsorIsRoot || sponsorHasCapping === true || sponsorIsAgent === true);
 
   const problem = useMemo(() => {
     if (!trimmed) return "";
     if (!validFormat) return "Enter a valid wallet address.";
     if (self) return "You can't sponsor yourself.";
     if (sponsorIsMember === false) return "This wallet isn't a registered member.";
-    if (sponsorIsMember === true && !sponsorActive) return "This sponsor isn't active. Their capping balance is zero.";
+    if (sponsorIsMember === true && !sponsorValid) return "This sponsor isn't valid. They have no capping left and aren't an agent.";
     return "";
-  }, [trimmed, validFormat, self, sponsorIsMember, sponsorActive]);
+  }, [trimmed, validFormat, self, sponsorIsMember, sponsorValid]);
 
   useEffect(() => { setError(""); }, [sponsor]);
 
-  const short = deposit !== undefined && balance !== undefined && balance < deposit;
-  const ready = validFormat && !self && sponsorActive && deposit !== undefined && !short && hasGas;
+  // initialDeposit 0 = no deposit: no USDT needed, no approval, register() skips the transfer.
+  const noDeposit = deposit === 0n;
+  const short = !noDeposit && deposit !== undefined && balance !== undefined && balance < deposit;
+  const ready = validFormat && !self && sponsorValid && deposit !== undefined && !short && hasGas;
 
   const submit = async (e) => {
     e.preventDefault();
     if (!ready || step) return;
     setError("");
     try {
-      if (deposit > 0n && allowance < deposit) {
+      if (!noDeposit) {
         setStep("Approve USDT in your wallet…");
-        await send({ address: CONTRACTS.usdt, abi: erc20Abi, functionName: "approve", args: [CONTRACTS.gateway, deposit] }, address);
-        await refetch();
+        if (await ensureAllowance(CONTRACTS.usdt, CONTRACTS.gateway, deposit, address)) await refetch();
       }
       setStep("Confirm your registration…");
       await send({ address: CONTRACTS.register, abi: REGISTER_ABI, functionName: "register", args: [trimmed] }, address);
@@ -125,10 +127,12 @@ function RegisterForm({ address, from }) {
 
         <ul className="mt-5 space-y-2.5">
           <CheckRow ok={hasGas} label={`${GAS_SYMBOL} for the network fee`} value={native === undefined ? "…" : `${Number(formatUnits(native.value, 18)).toFixed(4)} ${GAS_SYMBOL}`} />
-          <CheckRow ok={deposit !== undefined && !short} label={`${isLoading ? "…" : usdt(deposit)} USDT initial deposit`} value={isLoading ? "…" : `${usdt(balance)} USDT`} />
-          <CheckRow ok={sponsorActive && !self} label="Active sponsor" value={!validFormat ? "—" : checkingSponsor ? "…" : sponsorActive && !self ? "Yes" : "No"} />
+          {noDeposit
+            ? <CheckRow ok label="Initial deposit" value="Not required" />
+            : <CheckRow ok={deposit !== undefined && !short} label={`${isLoading ? "…" : usdt(deposit)} USDT initial deposit`} value={isLoading ? "…" : `${usdt(balance)} USDT`} />}
+          <CheckRow ok={sponsorValid && !self} label="Valid sponsor" value={!validFormat ? "—" : checkingSponsor ? "…" : sponsorValid && !self ? "Yes" : "No"} />
         </ul>
-        <p className="mt-3 text-[12.5px] text-muted">The initial deposit goes to your ZYQORIX wallet balance.</p>
+        {!noDeposit && <p className="mt-3 text-[12.5px] text-muted">The initial deposit goes to your ZYQORIX wallet balance.</p>}
         {native !== undefined && gasNeeded !== undefined && !hasGas && <p className="mt-2 text-[12.5px] font-semibold text-rose-500">You don't have enough {GAS_SYMBOL} for the network fee.</p>}
         {short && <p className="mt-2 text-[12.5px] font-semibold text-rose-500">You don't have enough USDT for the initial deposit.</p>}
         {error && <p className="mt-3 text-[12.5px] font-semibold text-rose-500" role="alert">{error}</p>}

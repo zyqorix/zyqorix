@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
-  ArrowDownToLine, ArrowUpFromLine, ChevronRight, Gift, House, Menu, Moon, Network, ShieldCheck, Sparkles, Sun, WalletMinimal, X,
+  ArrowDownToLine, ArrowUpFromLine, ChevronRight, Gift, House, Magnet, Menu, Moon, Network, ShieldCheck, Sparkles, Sun, WalletMinimal, X,
 } from "lucide-react";
 import { useAccount } from "wagmi";
 import { appKit } from "../lib/appkit.js";
@@ -10,6 +10,7 @@ import { useIsAdmin } from "../hooks/useIsAdmin.js";
 import { useMember } from "../hooks/useMember.js";
 import { useNetwork } from "../hooks/useNetwork.js";
 import { AccentPicker } from "./AccentPicker.jsx";
+import { same, useFundingWallets } from "./FundingWallets.jsx";
 import { Sheet, UiContext, useUi } from "./Ui.jsx";
 import { DepositSheet, WithdrawSheet } from "./MoneySheets.jsx";
 
@@ -20,7 +21,7 @@ const NAV = [
   { to: "/network", icon: Network, label: "Network" },
   { to: "/rewards", icon: Gift, label: "Rewards" },
 ];
-const TITLES = { "/": "ZYQORIX", "/wallet": "Wallet", "/network": "Network", "/account": "Account", "/rewards": "Rewards", "/rewards/leadershippool": "Leadership Pool", "/admin": "Admin", "/register": "Register" };
+const TITLES = { "/": "ZYQORIX", "/wallet": "Wallet", "/network": "Network", "/account": "Account", "/rewards": "Rewards", "/rewards/leadershippool": "Leadership Pool", "/admin": "Admin", "/register": "Register", "/fund": "Funding", "/about": "About", "/about/rewardsplan": "Rewards Plan", "/about/faq": "FAQ" };
 
 function Header({ title, clear, onMenu, theme }) {
   const [scrolled, setScrolled] = useState(false);
@@ -64,8 +65,15 @@ function TabBar({ onFab }) {
 
 function Drawer({ open, onClose, theme }) {
   const { isAdmin } = useIsAdmin();
+  const { address } = useAccount();
+  const { wallets } = useFundingWallets();
   const { name, wrongNetwork, appNetwork, switchToApp } = useNetwork();
-  const links = isAdmin ? [...NAV, { to: "/admin", icon: ShieldCheck, label: "Admin" }] : NAV;
+  const funding = isAdmin || wallets.some((w) => same(w, address));
+  const links = [
+    ...NAV,
+    ...(funding ? [{ to: "/fund", icon: Magnet, label: "Funding wallets" }] : []),
+    ...(isAdmin ? [{ to: "/admin", icon: ShieldCheck, label: "Admin" }] : []),
+  ];
   return (
     <>
       <aside className={`drawer${open ? " is-open" : ""}`} aria-label="Side menu" aria-hidden={!open} inert={!open}>
