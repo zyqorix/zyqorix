@@ -140,7 +140,7 @@ export function WithdrawSheet() {
     try {
       setStep("Confirm your withdrawal…");
       // The fee swap and burn runs in a try/catch, so the wallet estimate can settle on a limit where it runs out of
-      // gas and the fee is kept instead of burned. A short reward pool also pulls the funding wallets first (up to 5)
+      // gas and the fee is kept instead of burned. A short reward pool also pulls the funding wallets first (up to 10)
       // before that check. 1.1M covers both; only the gas actually used is paid.
       await send({ ...gateway, functionName: "withdraw", args: [chosen] }, address, { minGas: 1_100_000n });
       await queryClient.invalidateQueries();

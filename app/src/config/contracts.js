@@ -18,9 +18,10 @@ const ADDRESSES = {
   // retired: the previous stack. The checklist confirms it is disarmed (paused, position withdrawn, vesting migrated), and
   // the deploy list on /admin shows a contract as still to deploy while its address here equals the retired one.
   // exchanger: exchangerdisbursement.sol, the funder's trading wallet.
-  56: { usdt: USDT, accounts: "0xAB26C1ffcF3Ef20d53a12dd3B99850B376e68c45", gateway: "0x335Ffb932dd7729CfeCEF803ED5C0C44CB5b0d60", register: "0xE2c8C041186b9Ad13C9F3320DbC71c0d46642687", rewards: "0x2fc14F2b81B295811FAbd0c89ccC076f4d2271a9", funder: "0xe572591A48f39324895864380aae6E3dB953aD9C", exchanger: "0x0C2fe227bB435ACD6189C10F5a951BbdbC559F55", vesting: "0x60818CdD14951E2e3e91054AD9696b31A2d3018c", liquidity: "0xb0EB2Dd04f943B4466EA95A19671E8da579651E5", zqr: ZQR, swapRouter: "0x1b81D678ffb9C0263b24A97847620C99d213eB14", pool: "0xDac4D29e16b87e3D48c80CC569e8040C454582BF",
+  56: { usdt: USDT, accounts: "0x93427C7C3e3bA98DDC154919d27CeD03c04216dC", gateway: "0xCcA6d1B0F258620DbA8480142f599192F8425D0b", register: "0x1f6405DE9D9bEc98411013D626199b2C8D53A1A2", rewards: "0x8a202544061Cc0fC3a5ec59d249473751D0B0aFb", funder: "0xE109cF39b663e991694F27A3938246F38964061b", exchanger: "0x40Fa4C95558c20805dDCb8c3B8ff3ab433EEef1D", vesting: "0x8C974e39c114a3205d47Dc7E3680369550C45577", liquidity: "0x874529d27e0E46A3228561233691ADF7f7d63f62", zqr: ZQR, swapRouter: "0x1b81D678ffb9C0263b24A97847620C99d213eB14", pool: "0xDac4D29e16b87e3D48c80CC569e8040C454582BF",
     retired: {
       accounts: "0xAB26C1ffcF3Ef20d53a12dd3B99850B376e68c45", exchanger: "0x0C2fe227bB435ACD6189C10F5a951BbdbC559F55", liquidity: "0xb0EB2Dd04f943B4466EA95A19671E8da579651E5", vesting: "0x60818CdD14951E2e3e91054AD9696b31A2d3018c",
+      funder2:"0x6C7e5c18b9751068eF2662A56655994421714dDF",
       funder: "0xe572591A48f39324895864380aae6E3dB953aD9C", gateway: "0x335Ffb932dd7729CfeCEF803ED5C0C44CB5b0d60", rewards: "0x2fc14F2b81B295811FAbd0c89ccC076f4d2271a9", register: "0xE2c8C041186b9Ad13C9F3320DbC71c0d46642687",
     } },
 };

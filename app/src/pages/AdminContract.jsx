@@ -45,6 +45,7 @@ const json = (v) => JSON.stringify(v, (_, x) => (typeof x === "bigint" ? x.toStr
 function Value({ value, output }) {
   if (value === undefined) return <span className="text-muted">—</span>;
   if (typeof value === "bigint") {
+    if (value >= 2n ** 255n) return <span className="font-bold">Unlimited</span>; // a max approval, even after pulls shrink it
     const asToken = value >= 10n ** 15n && !RAW_NAME.test(output?.name ?? "");
     return (
       <span className="text-right">

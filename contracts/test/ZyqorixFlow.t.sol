@@ -697,8 +697,8 @@ contract ZyqorixFlowTest is Test {
         puller.addFundingWallet(fundingWallet);
         vm.expectRevert("ZERO_ADDRESS");
         puller.addFundingWallet(address(0));
-        for (uint256 i = 0; i < 4; i++) puller.addFundingWallet(address(uint160(0xF000 + i)));
-        assertEq(puller.walletCount(), 5);
+        for (uint256 i = 0; i < 9; i++) puller.addFundingWallet(address(uint160(0xF000 + i)));
+        assertEq(puller.walletCount(), 10);
         vm.expectRevert("TOO_MANY_WALLETS");
         puller.addFundingWallet(address(0xF100));
 
@@ -710,13 +710,13 @@ contract ZyqorixFlowTest is Test {
         puller.removeFundingWallet(fundingWallet); // the first: the last one moves into its slot
         assertFalse(puller.isFundingWallet(fundingWallet));
         address[] memory list = puller.fundingWallets();
-        assertEq(list.length, 4);
-        assertEq(list[0], address(uint160(0xF003)));
-        puller.removeFundingWallet(address(uint160(0xF003))); // removing the new first again
-        puller.removeFundingWallet(address(uint160(0xF001))); // the last one
+        assertEq(list.length, 9);
+        assertEq(list[0], address(uint160(0xF008)));
+        puller.removeFundingWallet(address(uint160(0xF008))); // removing the new first again
+        puller.removeFundingWallet(address(uint160(0xF006))); // the last one
         list = puller.fundingWallets();
-        assertEq(list.length, 2);
-        assertEq(list[0], address(uint160(0xF002)));
+        assertEq(list.length, 7);
+        assertEq(list[0], address(uint160(0xF007)));
         assertEq(list[1], address(uint160(0xF000)));
     }
 
@@ -753,6 +753,27 @@ contract ZyqorixFlowTest is Test {
         assertEq(puller.pendingFunding(), 0); // its remaining 10 approval no longer counts
         assertEq(puller.pullFunding(), 0);
         assertEq(usdt.balanceOf(fundingWallet), 20 ether);
+    }
+
+    /// @dev Worst case for MAX_WALLETS = 10: every wallet approved and pulled in one call stays far below the BSC cap.
+    function test_pullTenFundingWalletsGas() public {
+        ZyqorixFunder puller = _puller();
+        usdt.mint(fundingWallet, 1 ether);
+        vm.prank(fundingWallet);
+        usdt.approve(address(puller), type(uint256).max);
+        for (uint256 i = 0; i < 9; i++) {
+            address w = address(uint160(0xF000 + i));
+            puller.addFundingWallet(w);
+            usdt.mint(w, 1 ether);
+            vm.prank(w);
+            usdt.approve(address(puller), type(uint256).max);
+        }
+        assertEq(puller.walletCount(), puller.MAX_WALLETS());
+        uint256 g = gasleft();
+        assertEq(puller.pullFunding(), 10 ether);
+        g -= gasleft();
+        emit log_named_uint("pullFunding gas, 10 wallets", g);
+        assertLt(g, 1_000_000);
     }
 
     function test_withdrawalAutoPullsAcrossWallets() public {

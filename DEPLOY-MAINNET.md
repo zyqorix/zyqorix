@@ -6,7 +6,7 @@
 - **funder.sol (2026-11-09, owner decision):** the accounts owner **and any admin** may call `sendToTrading(amount)` as well as rewards (error `NOT_AUTH` for anyone else). It moves funder USDT (which includes member deposits) to the trading wallet and counts it in `tradingCapitalOut`. **Not on the NAS funder yet.** See Step 5.
 **Deployer:** the owner, in Remix (https://app.remix.live/). **Deploy accounts from the wallet that must be root:** root is the top of the tree and can never move.
 **Remix settings for every contract:** solc **0.8.38**, optimizer **on, 200 runs**, same EVM version for all, no via-IR. Source: `projects/zyqorix/contracts/`.
-**Why 0.8.38:** BscScan flags 0.8.37 for the low-severity bug SOL-2026-7 (YulOptimizerKnowledgeBaseStaleBookkeeping), which 0.8.38 fixes. Every contract pins exactly `pragma solidity 0.8.38;` (only zqrtoken.sol keeps a range, since ZQR is not redeployed). All 305 tests pass on 0.8.38. Runtime sizes at 200 runs, no via-IR, EVM shanghai or later (measured 2026-11-09): accounts 5,096 B, liquidity 16,252 B, vesting 4,428 B, exchanger 3,052 B, funder 7,206 B, gateway 11,673 B, rewards 19,905 B, register 1,639 B (limit 24,576). On EVM paris, rewards is 20,307 B, still under the limit.
+**Why 0.8.38:** BscScan flags 0.8.37 for the low-severity bug SOL-2026-7 (YulOptimizerKnowledgeBaseStaleBookkeeping), which 0.8.38 fixes. Every contract pins exactly `pragma solidity 0.8.38;` (only zqrtoken.sol keeps a range, since ZQR is not redeployed). All 305 tests pass on 0.8.38. Runtime sizes at 200 runs, no via-IR (clean isolated build 2026-11-09; the mainnet accounts matched it byte for byte): accounts 5,725 B, liquidity 18,085 B, vesting 5,048 B, exchanger 3,353 B, funder 8,199 B, gateway 13,503 B, rewards 20,567 B, register 1,806 B (limit 24,576).
 **After each contract:** verify it on BscScan and send Claude the address. Claude compares the on-chain code to the 0.8.38 build and confirms each task with a read-only `cast call`. Tick ☐ only when the check matches.
 
 ## Deployment order at a glance
@@ -53,6 +53,7 @@ ACCOUNTS= EXCHANGER= LIQUIDITY= VESTING= FUNDER= GATEWAY= REWARDS= REGISTER=   #
 - ☐ 1.1 Verify on BscScan and send Claude the address. Check: `owner()` = `root()` = the deployer.
 
 ## Step 2: exchanger: deploy `ExchangerDisbursement(owner)`
+- **Deployed 2026-11-09:** `0x40Fa4C95558c20805dDCb8c3B8ff3ab433EEef1D` (owner `0x1fEb…2414`). Remix compiled `contracts/exchangerdisbursement.sol` against OpenZeppelin 5.5+ from npm (the bytecode matches OZ 5.5.0–5.7.0, not the 5.1.0 the suite uses). Same source and functions; the 19 exchanger tests pass on OZ 5.7.0. Verify it on BscScan from Remix with the same sources, not with `deploy/ExchangerDisbursement.flat.sol` (that one inlines OZ 5.1.0).
 - ☐ 2.1 Verify and send the address. Check: `usdt()` = USDT, `owner()` = owner.
 - ☐ 2.2 `addExchanger(e)` for each of the client's exchanger wallets. Check: `exchangerCount()`.
   - **Rule:** an exchanger wallet can never also be a funding wallet (Step 9). Pick the owner wallet for one role only.
@@ -61,7 +62,7 @@ ACCOUNTS= EXCHANGER= LIQUIDITY= VESTING= FUNDER= GATEWAY= REWARDS= REGISTER=   #
 - ☐ 3.1 Verify and send the address. Check: `TOKEN()` = ZQR, `USDT()` = USDT.
 - ☐ 3.2 `initializePool(POOL)`. Check: `FEE()` = 10000.
 - ☐ 3.3 `initializeApproval()`. Check: `USDT.allowance(LIQUIDITY, router)` > 0.
-- ☐ 3.4 `growObservationCardinality(next)` with next = **1200**, then **2200**, **3200**, **4100**. This is pool state. Check: the 5th value of `pool.slot0()` ≥ 4100.
+- ☐ 3.4 `growObservationCardinality(next)` with next = **800**, **1400**, **2000**, **2600**, **3200**, **3800**, **4100**. BSC caps a transaction at 16,777,216 gas and each new slot costs about 22,600 gas, so a step can add at most about 700 slots (measured 2026-11-09: 200→900 estimates 15.9M gas, 200→1000 fails). This is pool state. Check: the 5th value of `pool.slot0()` ≥ 4100.
 - ☐ 3.5 `setTradingWallet(EXCHANGER)`. Check: `tradingWallet()` = EXCHANGER.
 - ☐ 3.6 Seed the position at the current price:
   1. approve and `depositUSDT(amount)`;
@@ -100,7 +101,7 @@ GATEWAY is locked in for good, so it must be the Step 6 address. This is the 202
 ---
 
 ## Step 9: funding wallets
-- ☐ 9.1 `funder.addFundingWallet(w)` for each client funding wallet (at most 5). For each wallet: `exchanger.isExchanger(w)` must be false, and it must not equal `liquidity.tradingWallet()`.
+- ☐ 9.1 `funder.addFundingWallet(w)` for each client funding wallet (at most 10). For each wallet: `exchanger.isExchanger(w)` must be false, and it must not equal `liquidity.tradingWallet()`.
 - ☐ 9.2 Each funding wallet approves the new funder on zyqorix.net `/fund`. Check: `USDT.allowance(w, FUNDER)` > 0.
 
 ## Step 10: app cutover (Claude, publish on your OK)

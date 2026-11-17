@@ -94,7 +94,7 @@ contract ZyqorixFunder {
 
     /* --------------------------- Funding wallets ----------------------- */
     /// @notice The most funding wallets at once. Bounds the gas a withdrawal spends pulling.
-    uint256 public constant MAX_WALLETS = 5;
+    uint256 public constant MAX_WALLETS = 10;
     /// @notice The client wallets whose approved USDT funds the reward pool. Empty disables pulling.
     address[] private _wallets;
     /// @notice True for each current funding wallet.

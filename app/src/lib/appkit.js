@@ -26,7 +26,7 @@ const anvil = defineChain({
 const NETWORKS = { anvil, bsc };
 const host = window.location.hostname;
 const isLocal = host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host.endsWith(".localhost");
-export const network = anvil;// NETWORKS[import.meta.env.VITE_NETWORK] || (isLocal ? anvil : bsc);
+export const network = NETWORKS[import.meta.env.VITE_NETWORK] || (isLocal ? anvil : bsc);
 const networks = [network];
 
 export const ACTIVE_CHAIN_ID = network.id;

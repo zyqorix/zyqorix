@@ -7,7 +7,7 @@ const chainId = ACTIVE_CHAIN_ID;
 const REASONS = [
   ["CALLER_NOT_EOA", "Use a regular wallet. Smart contract wallets aren't supported."],
   ["SPONSOR_NOT_FOUND", "That sponsor isn't a registered member."],
-  ["SPONSOR_NOT_ACTIVE", "That sponsor isn't valid. They have no capping left and aren't an agent."],
+  ["SPONSOR_NOT_ACTIVE", "That sponsor isn't valid. They have no capping left."],
   ["ALREADY_REGISTERED", "This wallet is already registered."],
   ["PAUSED", "This is paused right now."],
   ["TIER_LOCKED", "This tier isn't open yet."],

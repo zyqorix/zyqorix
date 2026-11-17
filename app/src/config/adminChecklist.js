@@ -70,7 +70,7 @@ export const CHECKLIST = {
     { label: "Pool initialized", read: ["liquidity", "FEE"], ok: (v) => Number(v) > 0, fix: "liquidity.initializePool(pool)" },
     { label: "Router approved", read: ["usdt", "allowance", [CONTRACTS.liquidity, CONTRACTS.swapRouter]], ok: positive, fix: "liquidity.initializeApproval()", skip: !CONTRACTS.swapRouter },
     // slot0[4] is observationCardinalityNext: the slots requested. The pool fills them as trades land.
-    { label: `TWAP slots ≥ ${TWAP_SLOTS.toLocaleString()} requested`, read: ["pool", "slot0"], ok: (v) => Array.isArray(v) && Number(v[4]) >= TWAP_SLOTS, fix: "liquidity.growObservationCardinality(next): 1200, 2200, 3200, then 4100 (next is the new total)", skip: !CONTRACTS.pool },
+    { label: `TWAP slots ≥ ${TWAP_SLOTS.toLocaleString()} requested`, read: ["pool", "slot0"], ok: (v) => Array.isArray(v) && Number(v[4]) >= TWAP_SLOTS, fix: "liquidity.growObservationCardinality(next): 800, 1400, 2000, 2600, 3200, 3800, then 4100 (next is the new total; BSC caps a transaction at ~700 new slots)", skip: !CONTRACTS.pool },
     { label: "TWAP price ready", read: ["liquidity", "convertToken", [CONTRACTS.usdt, parseEther("1")]], ok: positive, fix: "seed the pool, then wait 30 minutes" },
     { label: "Position minted", read: ["liquidity", "TOKENID"], ok: positive, fix: "depositUSDT, depositToken, initializePosition()" },
     { label: "Trading wallet is the exchanger", read: ["liquidity", "tradingWallet"], ok: same(CONTRACTS.exchanger), fix: "liquidity.setTradingWallet(exchanger)" },

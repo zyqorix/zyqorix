@@ -12,7 +12,7 @@ After every deploy or call: send Claude the address or the transaction hash. Tic
 - ☐ A1 **Wallets ready:**
   - **Root/owner wallet:** deploys every contract. It becomes the permanent root of the member tree and can never move.
   - **Exchanger wallets:** the client's wallets.
-  - **Funding wallets:** at most 5. None of them may also be an exchanger wallet.
+  - **Funding wallets:** at most 10. None of them may also be an exchanger wallet.
   - **Multisig (Safe):** created on BNB Smart Chain, for step 11.3.
 - ☐ A2 Root wallet holds **at least 0.3 BNB** for gas, plus the liquidity seed in USDT and ZQR (step 3.6).
 - ☐ A3 Use a **private RPC** in the wallet (e.g. a MEV-protected BSC RPC) for the liquidity seed in 3.6.
@@ -67,7 +67,9 @@ The old vesting's 501M ZQR moves in step 4.2.
 - ☐ 3.2 Verify and send the address.
 - ☐ 3.3 `initializePool(0xDac4D29e16b87e3D48c80CC569e8040C454582BF)`. Check: `FEE()` = 10000.
 - ☐ 3.4 `initializeApproval()`.
-- ☐ 3.5 `growObservationCardinality`, called 4 times: **1200**, then **2200**, **3200**, **4100**.
+- ☐ 3.5 `growObservationCardinality`, called 7 times: **800**, **1400**, **2000**, **2600**, **3200**, **3800**, **4100**.
+  - Each step adds at most about 600 slots, because BSC caps one transaction at 16,777,216 gas and each slot costs about 22,600 gas. A step of 1,000 slots (the old 1200 first step) fails.
+  - Each step costs about 13.6M gas, roughly 0.0007 BNB at 0.05 gwei.
 - ☐ 3.6 `setTradingWallet(EXCHANGER)`.
 - ☐ 3.7 Seed the position, through the **private RPC**. In the USDT and ZQR token contracts, `approve(LIQUIDITY, amount)` first, then:
   1. `depositUSDT(amount)`;
@@ -114,7 +116,7 @@ The old vesting's 501M ZQR moves in step 4.2.
 
 ## Step 9. Funding wallets
 
-- ☐ 9.1 On the funder: `addFundingWallet(wallet)`, once per wallet (at most 5). Never use an exchanger wallet.
+- ☐ 9.1 On the funder: `addFundingWallet(wallet)`, once per wallet (at most 10). Never use an exchanger wallet.
 - ☐ 9.2 Each funding wallet approves the funder on zyqorix.net `/fund`.
 
 ## Step 10. App cutover (Claude, on your OK)
@@ -125,6 +127,23 @@ The old vesting's 501M ZQR moves in step 4.2.
   1. register (50 USDT);
   2. activate $50;
   3. withdraw 20.
+
+## Step F. Swap in the 10-wallet funder (2026-11-10, before Step 11)
+
+`MAX_WALLETS` is a constant, so raising it from 5 to 10 needs a new funder. **Only the funder is redeployed.** The gateway switches with `setFunder`, which works only until 11.2 `lockFunder()`. Rewards reads `gateway.funder()` every time, so it follows automatically. No other contract points at the funder.
+
+| ☐ | Call | Check |
+|---|---|---|
+| ☐ F1 | Compile `contracts/funder.sol` (contract `ZyqorixFunder`) with the A5 settings. Deploy with `(0x93427C7C3e3bA98DDC154919d27CeD03c04216dC)` (accounts). Send Claude the address. | Bytecode matches, `MAX_WALLETS()` = 10 |
+| ☐ F2 | New funder → `setGateway(0xCcA6d1B0F258620DbA8480142f599192F8425D0b)` | `gateway()` |
+| ☐ F3 | New funder → `setRewards(0x8a202544061Cc0fC3a5ec59d249473751D0B0aFb)` | `rewards()` |
+| ☐ F4 | New funder → `setTradingWallet(0x40Fa4C95558c20805dDCb8c3B8ff3ab433EEef1D)` (exchanger) | `tradingWallet()` |
+| ☐ F5 | Move the old funder's 20 USDT: old funder `0x6C7e5c18b9751068eF2662A56655994421714dDF` → `sendToTrading(20000000000000000000)`, then on the exchanger `disburseFunding()`, then send 20 USDT from the root wallet to the **new** funder with a plain USDT `transfer`. Never use `fundRewards` for this: the 20 backs what members are owed and is not reward pool. | Old funder holds 0 USDT, new funder holds ≥ 20 |
+| ☐ F6 | Gateway → `setFunder(NEW_FUNDER)` | `gateway.funder()` = new funder |
+| ☐ F7 | New funder → `addFundingWallet(w)` for each wallet, up to 10. Each wallet approves the **new** funder on `/fund`. Approvals to the old funder don't carry over. | `walletCount()`, `pendingFunding()` |
+| ☐ F8 | Claude puts the new funder into the app (`contracts.js`) and republishes zyqorix.net, on your OK. | `/admin` → Configuration all green |
+
+The old funder is left in place, unwired. Its funding-wallet list is already empty.
 
 ## Step 11. Launch locks and multisig (before real deposits)
 

@@ -60,7 +60,7 @@ export const DEPLOY_ORDER = [
   },
   {
     step: 9, label: "Funding wallets", file: null, args: null,
-    tasks: ["funder.addFundingWallet(wallet), up to 5, none an exchanger", "each funding wallet approves the funder on /fund"],
+    tasks: ["funder.addFundingWallet(wallet), up to 10, none an exchanger", "each funding wallet approves the funder on /fund"],
   },
   {
     step: 10, label: "Switch the app", file: null, args: null,

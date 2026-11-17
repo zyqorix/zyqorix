@@ -78,7 +78,7 @@ function RegisterForm({ address, from }) {
     if (!validFormat) return "Enter a valid wallet address.";
     if (self) return "You can't sponsor yourself.";
     if (sponsorIsMember === false) return "This wallet isn't a registered member.";
-    if (sponsorIsMember === true && !sponsorValid) return "This sponsor isn't valid. They have no capping left and aren't an agent.";
+    if (sponsorIsMember === true && !sponsorValid) return "This sponsor isn't valid. They have no capping left.";
     return "";
   }, [trimmed, validFormat, self, sponsorIsMember, sponsorValid]);
 

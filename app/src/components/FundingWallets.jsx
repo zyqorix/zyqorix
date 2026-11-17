@@ -38,6 +38,10 @@ function Row({ label, value, note, tone = "" }) {
   );
 }
 
+// An "Approve unlimited" approval shrinks a little with every pull (BSC USDT deducts even a max approval), so
+// anything above 1e20 USDT still reads as unlimited.
+const UNLIMITED = parseUnits("100000000000000000000", 18);
+
 /** The client's funding wallets: each approves the funder once, and the USDT they hold (each up to its approval)
  *  is pulled in and booked like fundRewards when a withdrawal needs the pool, or here with Book now. */
 export function FundingWallets() {
@@ -113,7 +117,7 @@ export function FundingWallets() {
               <div className="min-w-0">
                 <p className="text-[13px] font-semibold">{short(w)}{same(w, address) && <span className="ml-1 text-[11px] text-brand">(you)</span>}</p>
                 <p className="text-[11.5px] text-muted">
-                  {balance !== undefined ? `${money(balance)} USDT` : "—"} · approved {allowance === undefined ? "—" : allowance === maxUint256 ? "unlimited" : money(allowance)}
+                  {balance !== undefined ? `${money(balance)} USDT` : "—"} · approved {allowance === undefined ? "—" : allowance >= UNLIMITED ? "unlimited" : money(allowance)}
                 </p>
               </div>
               {isOwner && (
