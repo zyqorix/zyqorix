@@ -108,9 +108,12 @@ function SignalCard({ s, now }) {
         <Stat label="Funding" value={Number.isFinite(s.funding) ? pct(s.funding, 4) : "–"} sub={Number.isFinite(s.funding) ? "current rate" : "spot only"} tone={s.funding < 0 ? "text-rose-500" : ""} />
       </div>
 
-      {/* Regime: Markov 4h odds from the current regime */}
+      {/* Regime: Markov 4h odds from the current regime, from this coin's own history when the API has its table */}
       <div className="mt-3 space-y-2">
-        <p className="text-[11.5px] text-muted">Next 4h from <span className={`font-bold ${REGIME_TONE[s.markov.from]}`}>{s.markov.from.toUpperCase()}</span> (Markov)</p>
+        <p className="text-[11.5px] text-muted">{s.coin} next {s.markov.horizonHours ?? 4}h from <span className={`font-bold ${REGIME_TONE[s.markov.from]}`}>{s.markov.from.toUpperCase()}</span> (Markov)</p>
+        <p className="text-[11px] text-muted">{s.markov.scope === "coin"
+          ? `From ${s.coin}'s own ${s.markov.days ?? ""}d history (${s.markov.hours ?? 0}h in ${s.markov.from.toUpperCase()}${(s.markov.hours ?? 0) < 100 ? ", mostly the market's" : ""})`
+          : `All coins: no table for ${s.coin} yet`}</p>
         <RegimeBar label="Regime Bull" value={s.markov.bull} tone="bg-emerald-500" />
         <RegimeBar label="Regime Bear" value={s.markov.bear} tone="bg-rose-500" />
         <RegimeBar label="Regime Sideways" value={s.markov.sideways} tone="bg-slate-400" />
@@ -145,7 +148,7 @@ function SignalCard({ s, now }) {
             <p className="mb-1 text-[11.5px] font-bold uppercase tracking-wide text-muted">Regime ({s.regime.hours}h)</p>
             <Row k="Before the move" v={<span className={REGIME_TONE[s.regime.before.state]}>{regimeLabel(s.regime.before)}</span>} />
             <Row k="Now" v={<span className={REGIME_TONE[s.regime.now.state]}>{regimeLabel(s.regime.now)}</span>} />
-            <Row k="Markov signal" v={`${s.markov.signal >= 0 ? "+" : "−"}${Math.abs(s.markov.signal)}% ${s.markov.right != null ? ` · historically right ${s.markov.right}%` : ""}`} />
+            <Row k="Markov signal" v={`${s.markov.signal >= 0 ? "+" : "−"}${Math.abs(s.markov.signal)}% ${s.markov.right != null ? ` · all coins historically right ${s.markov.right}%` : ""}`} />
             {s.switch && <Row k="Regime switch" v={`${s.switch.state} · ${s.switch.text}${s.switch.skipped ? " → short skipped" : " → short as usual"}`} />}
             {s.bot && <Row k="Bot" v={`${s.bot.decision}${s.bot.reason ? ` (${s.bot.reason.replace(/_/g, " ")})` : ""}`} />}
           </div>
